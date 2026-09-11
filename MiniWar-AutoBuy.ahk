@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.3.1 Test Build
+; v2.3.2 Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.3.1-test"
+AppVersion := "v2.3.2-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -144,8 +144,8 @@ PurchaseAttempts := 0
 RunStartedAt := 0
 LastRunElapsedMs := 0
 
-CategoryLists := Map()
-CategoryVisibleItems := Map()
+ActiveCategory := "Factories"
+VisibleShopItems := []
 
 ; -----------------------------------------------------------------------------
 ; Load Saved Preferences
@@ -206,20 +206,45 @@ ClearSearchButton := MainGui.Add(
     "Clear"
 )
 
-ShopTabs := MainGui.Add(
-    "Tab3",
-    "x42 y166 w720 h520",
+MainGui.SetFont("s9 Bold", "Segoe UI")
+MainGui.Add("Text", "x42 y174 w70 h22", "Section")
+
+MainGui.SetFont("s10 Norm", "Segoe UI")
+CategoryDropdown := MainGui.Add(
+    "DropDownList",
+    "x115 y168 w225 Choose1",
     ["Factories", "Houses", "Military"]
 )
 
-CreateCategoryTab("Factories")
-CreateCategoryTab("Houses")
-CreateCategoryTab("Military")
-ShopTabs.UseTab()
+SelectCategoryButton := MainGui.Add(
+    "Button",
+    "x355 y168 w165 h30",
+    "Select All Factories"
+)
+
+ClearCategoryButton := MainGui.Add(
+    "Button",
+    "x530 y168 w165 h30",
+    "Clear Factories"
+)
+
+CategorySummaryLabel := MainGui.Add(
+    "Text",
+    "x42 y210 w700 h22",
+    "Factories"
+)
+
+ShopList := MainGui.Add(
+    "ListView",
+    "x42 y238 w720 h445 Checked -Multi",
+    ["Shop Item"]
+)
+
+ShopList.ModifyCol(1, 680)
 
 SelectionLabel := MainGui.Add(
     "Text",
-    "x42 y699 w300 h24",
+    "x42 y699 w500 h24",
     "Selected: 0 items"
 )
 
@@ -286,14 +311,18 @@ MainGui.Add("Text", "x815 y730 w340 h24 Center", "F1  Start / Stop     •     F
 
 ; Events ----------------------------------------------------------------------
 
-SearchEdit.OnEvent("Change", (*) => RebuildShopLists())
+SearchEdit.OnEvent("Change", (*) => RebuildShopList())
 ClearSearchButton.OnEvent("Click", ClearSearch)
+CategoryDropdown.OnEvent("Change", CategoryChanged)
+SelectCategoryButton.OnEvent("Click", (*) => SetCategorySelection(ActiveCategory, true))
+ClearCategoryButton.OnEvent("Click", (*) => SetCategorySelection(ActiveCategory, false))
+ShopList.OnEvent("ItemCheck", OnShopItemCheck)
 StartStopButton.OnEvent("Click", StartStopButtonClicked)
 MainGui.OnEvent("Close", OnGuiClose)
 
 MainGui.Show("w1180 h780")
 
-RebuildShopLists()
+RebuildShopList()
 RefreshSelectionSummary()
 UpdateRobloxStatus()
 UpdateStatsDisplay()
@@ -302,116 +331,104 @@ SetTimer(UpdateRobloxStatus, 1000)
 SetTimer(UpdateRuntimeDisplay, 1000)
 
 ; -----------------------------------------------------------------------------
-; GUI Creation
+; GUI / Shop Browser
 ; -----------------------------------------------------------------------------
 
-CreateCategoryTab(Category) {
-    global MainGui, ShopTabs, CategoryLists, CategoryVisibleItems
+CategoryChanged(*) {
+    global CategoryDropdown, ActiveCategory
+    global SelectCategoryButton, ClearCategoryButton
 
-    ShopTabs.UseTab(Category)
+    ActiveCategory := CategoryDropdown.Text
 
-    MainGui.SetFont("s9 Norm", "Segoe UI")
+    SelectCategoryButton.Text := "Select All " ActiveCategory
+    ClearCategoryButton.Text := "Clear " ActiveCategory
 
-    SelectCategoryButton := MainGui.Add(
-        "Button",
-        "x58 y208 w150 h30",
-        "Select All " Category
-    )
-
-    ClearCategoryButton := MainGui.Add(
-        "Button",
-        "x+10 yp w150 h30",
-        "Clear " Category
-    )
-
-    ShopList := MainGui.Add(
-        "ListView",
-        "x58 y250 w685 h410 Checked -Multi",
-        ["Shop Item"]
-    )
-
-    ShopList.ModifyCol(1, 650)
-
-    SelectCategoryButton.OnEvent(
-        "Click",
-        (*) => SetCategorySelection(Category, true)
-    )
-
-    ClearCategoryButton.OnEvent(
-        "Click",
-        (*) => SetCategorySelection(Category, false)
-    )
-
-    ShopList.OnEvent(
-        "ItemCheck",
-        (Ctrl, Row, Checked) => OnShopItemCheck(Category, Row, Checked)
-    )
-
-    CategoryLists[Category] := ShopList
-    CategoryVisibleItems[Category] := []
+    RebuildShopList()
 }
 
-; -----------------------------------------------------------------------------
-; Search / List Model
-; -----------------------------------------------------------------------------
-
-RebuildShopLists(*) {
-    global Items, CategoryLists, CategoryVisibleItems
-    global SearchEdit, IsRefreshingLists
+RebuildShopList(*) {
+    global Items, ShopList, VisibleShopItems
+    global SearchEdit, ActiveCategory, IsRefreshingLists
+    global CategorySummaryLabel
 
     SearchText := StrLower(Trim(SearchEdit.Value))
+
     IsRefreshingLists := true
+    ShopList.Delete()
+    VisibleShopItems := []
 
-    for Category, ShopList in CategoryLists {
-        ShopList.Delete()
+    CategoryTotal := 0
+    VisibleCount := 0
+    SelectedInCategory := 0
 
-        VisibleItems := []
-
-        for Item in Items {
-            if Item.category != Category {
-                continue
-            }
-
-            if SearchText != "" && !InStr(StrLower(Item.name), SearchText) {
-                continue
-            }
-
-            RowOptions := Item.selected ? "Check" : ""
-            ShopList.Add(RowOptions, Item.name)
-            VisibleItems.Push(Item)
+    for Item in Items {
+        if Item.category != ActiveCategory {
+            continue
         }
 
-        CategoryVisibleItems[Category] := VisibleItems
-        ShopList.ModifyCol(1, 650)
+        CategoryTotal += 1
+
+        if Item.selected {
+            SelectedInCategory += 1
+        }
+
+        if SearchText != "" && !InStr(StrLower(Item.name), SearchText) {
+            continue
+        }
+
+        RowOptions := Item.selected ? "Check" : ""
+        ShopList.Add(RowOptions, Item.name)
+        VisibleShopItems.Push(Item)
+        VisibleCount += 1
     }
 
+    ShopList.ModifyCol(1, 680)
     IsRefreshingLists := false
+
+    if SearchText = "" {
+        CategorySummaryLabel.Text := (
+            ActiveCategory
+            "  •  "
+            CategoryTotal
+            " items  •  "
+            SelectedInCategory
+            " selected"
+        )
+    } else {
+        CategorySummaryLabel.Text := (
+            ActiveCategory
+            "  •  "
+            VisibleCount
+            " matching  •  "
+            SelectedInCategory
+            " selected total"
+        )
+    }
+
     RefreshSelectionSummary()
 }
 
-OnShopItemCheck(Category, Row, Checked) {
-    global CategoryVisibleItems, IsRefreshingLists
+OnShopItemCheck(Ctrl, Row, Checked) {
+    global VisibleShopItems, IsRefreshingLists
 
     if IsRefreshingLists {
         return
     }
 
-    VisibleItems := CategoryVisibleItems[Category]
-
-    if Row < 1 || Row > VisibleItems.Length {
+    if Row < 1 || Row > VisibleShopItems.Length {
         return
     }
 
-    VisibleItems[Row].selected := Checked ? true : false
+    VisibleShopItems[Row].selected := Checked ? true : false
 
-    SetTimer(RefreshSelectionSummary, -1)
+    SetTimer(RebuildShopList, -1)
 }
 
 ClearSearch(*) {
     global SearchEdit
 
     SearchEdit.Value := ""
-    RebuildShopLists()
+    RebuildShopList()
 }
 
 SetCategorySelection(Category, ShouldSelect) {
@@ -428,7 +445,7 @@ SetCategorySelection(Category, ShouldSelect) {
         }
     }
 
-    RebuildShopLists()
+    RebuildShopList()
 }
 
 RefreshSelectionSummary() {
@@ -611,7 +628,7 @@ RunPurchaseCycle() {
         UpdateStatus("Buying " Item.name "...")
         UpdateCurrentProgress(
             Item.name,
-            "Item " Index " of " SelectedItems.Length
+            Index " of " SelectedItems.Length
         )
 
         PurchaseAttempts += 1
@@ -911,11 +928,26 @@ ApplySettingsFromGui() {
     global AutoFocusCheckbox, RememberSelectionsCheckbox
     global BuyFullStockCheckbox
 
-    ; Read and clamp each field directly. Keeping each value independent avoids
-    ; stale/unassigned temporary variables during GUI shutdown or reload.
-    CycleSecondsValue := Max(5, Min(600, CycleDelayEdit.Value + 0))
-    BetweenItemsValue := Max(100, Min(5000, BetweenItemsEdit.Value + 0))
-    MaxStockValue := Max(1, Min(12, MaxStockEdit.Value + 0))
+    CycleSecondsValue := ReadClampedInteger(
+        CycleDelayEdit,
+        20,
+        5,
+        600
+    )
+
+    BetweenItemsValue := ReadClampedInteger(
+        BetweenItemsEdit,
+        1000,
+        100,
+        5000
+    )
+
+    MaxStockValue := ReadClampedInteger(
+        MaxStockEdit,
+        8,
+        1,
+        12
+    )
 
     CycleDelayEdit.Value := CycleSecondsValue
     BetweenItemsEdit.Value := BetweenItemsValue
@@ -927,6 +959,25 @@ ApplySettingsFromGui() {
     Settings.buyFullStock := BuyFullStockCheckbox.Value = 1
     Settings.autoFocusRoblox := AutoFocusCheckbox.Value = 1
     Settings.rememberSelections := RememberSelectionsCheckbox.Value = 1
+}
+
+ReadClampedInteger(Control, DefaultValue, MinimumValue, MaximumValue) {
+    RawValue := Trim(Control.Value)
+
+    ; Windows UpDown controls can render values such as "1,000".
+    ; Remove thousands separators before numeric conversion.
+    RawValue := StrReplace(RawValue, ",", "")
+
+    if RawValue = "" || !IsNumber(RawValue) {
+        return DefaultValue
+    }
+
+    NumericValue := Round(RawValue + 0)
+
+    return Max(
+        MinimumValue,
+        Min(MaximumValue, NumericValue)
+    )
 }
 
 LoadPreferences() {
