@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.5.1 Fast Stock Test Build
+; v2.5.2 Tab Sync Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.5.1-fast-stock-test"
+AppVersion := "v2.5.2-tab-sync-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -820,69 +820,46 @@ OpenShop() {
 OpenCategory(Category) {
     global Settings
 
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
+        return false
+    }
+
+    ; Explicitly click the requested shop tab so Roblox's remembered tab state
+    ; cannot desynchronize the macro from the visible category.
     switch Category {
         case "Factories":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.navigationDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.navigationDelay)
-            return true
+            TabX := ClientX + Round(ClientWidth * 0.305)
 
         case "Houses":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-            return true
+            TabX := ClientX + Round(ClientWidth * 0.430)
 
         case "Military":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-            return true
+            TabX := ClientX + Round(ClientWidth * 0.555)
 
         default:
             StopImmediately("Unknown category: " Category)
             return false
     }
+
+    TabY := ClientY + Round(ClientHeight * 0.305)
+
+    Click(TabX, TabY)
+    Sleep(Settings.categoryDelay)
+
+    ; Verify the shop is still present after the click. This does not attempt
+    ; OCR; it simply ensures we did not leave the shop.
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Category switch failed - shop lost.")
+        return false
+    }
+
+    return true
 }
 
 NavigateToPurchaseButton(DownCount) {
