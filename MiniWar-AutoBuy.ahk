@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.5.2 Tab Sync Test Build
+; v2.5.3 Focus Sync Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.5.2-tab-sync-test"
+AppVersion := "v2.5.3-focus-sync-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -830,8 +830,12 @@ OpenCategory(Category) {
         return false
     }
 
-    ; Explicitly click the requested shop tab so Roblox's remembered tab state
-    ; cannot desynchronize the macro from the visible category.
+    ; Temporarily leave Roblox UI Navigation before using the mouse.
+    ; Mouse selection and Roblox UI-navigation selection are separate states.
+    Send("\")
+    Sleep(80)
+
+    ; Click the requested category tab using the current Roblox client size.
     switch Category {
         case "Factories":
             TabX := ClientX + Round(ClientWidth * 0.305)
@@ -850,12 +854,26 @@ OpenCategory(Category) {
     TabY := ClientY + Round(ClientHeight * 0.305)
 
     Click(TabX, TabY)
-    Sleep(Settings.categoryDelay)
+    Sleep(140)
 
-    ; Verify the shop is still present after the click. This does not attempt
-    ; OCR; it simply ensures we did not leave the shop.
     if Settings.shopGuardEnabled && !IsShopVisible() {
         StopImmediately("Category switch failed - shop lost.")
+        return false
+    }
+
+    ; Re-enable UI Navigation while the mouse is parked on the selected tab.
+    ; This is intended to re-anchor keyboard navigation inside the shop rather
+    ; than leaving it on Auto Collect / Invite Friends / other world UI.
+    Send("\")
+    Sleep(160)
+
+    ; Activate the currently focused category control and allow the list to
+    ; settle before item navigation begins.
+    Send("{Enter}")
+    Sleep(Settings.categoryDelay)
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop focus sync failed.")
         return false
     }
 
