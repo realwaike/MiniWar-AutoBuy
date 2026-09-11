@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.6.2-anchor-ui-test"
+AppVersion := "v2.6.3-cash-column-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -406,7 +406,7 @@ MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x605 y410 w420 h100",
-    "Category switching is mouse-anchored: the macro clicks the exact category tab, clicks the first item cash button to establish a known focus point, then uses Down navigation from that anchor."
+    "Category switching is mouse-anchored: the macro switches tabs, anchors the first item row, moves onto the green cash column, then sweeps downward through that column."
 )
 
 MainTabs.UseTab()
@@ -936,8 +936,7 @@ OpenCategory(Category) {
         return false
     }
 
-    ; Stop relying on Roblox's remembered keyboard focus.
-    ; Click the requested category directly.
+    ; Switch the visible shop category directly.
     switch Category {
         case "Factories":
             TabX := ClientX + Round(ClientWidth * 0.306)
@@ -963,14 +962,21 @@ OpenCategory(Category) {
         return false
     }
 
-    ; Anchor directly to the first row's green cash button.
-    ; The screenshots confirm the first item begins at the top after changing
-    ; categories, and Down moves from one cash button to the next.
+    ; Anchor on the first item's purchase-button row.
     AnchorX := ClientX + Round(ClientWidth * 0.676)
     AnchorY := ClientY + Round(ClientHeight * 0.529)
 
     Click(AnchorX, AnchorY)
     Sleep(Settings.itemAnchorDelay)
+
+    ; Roblox UI Navigation resolves this row to the left purchase button
+    ; (the purple Robux button). Move one step right onto the green cash button
+    ; before any vertical bulk navigation begins.
+    if !SendToRoblox("{Right}") {
+        return false
+    }
+
+    Sleep(Settings.navigationDelay)
 
     return true
 }
