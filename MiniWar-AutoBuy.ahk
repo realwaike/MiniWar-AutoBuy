@@ -3,9 +3,11 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; Version 2
+; v2.1
 ;
-; AutoHotkey v2 utility for repeated Mini War shop purchases.
+; Restores the known-good v1 purchase sequence, adds the complete current
+; Mini War shop list, and replaces the v2 checkbox layout with reliable
+; category ListViews.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -15,97 +17,91 @@
 Settings := {
     robloxWindow: "ahk_exe RobloxPlayerBeta.exe",
     cycleDelay: 20000,
-    betweenItemsDelay: 1000,
-    menuEntryDelay: 1000,
-    menuOpenDelay: 4000,
-    navigationDelay: 100,
-    categoryNavigationDelay: 500
+    betweenItemsDelay: 1000
 }
 
-; Shop positions are based on the current Mini War shop order.
+; IMPORTANT:
+; "downCount" is the number of Down presses used by the proven v1 navigation.
 ;
-; Position conventions are preserved from the working v1 navigation:
-;   Factories = displayed item number + 1
-;   Houses   = displayed item number + 1
-;   Military = displayed item number
+; Known v1 anchors:
+;   Data Center            = 19
+;   Blackhole Generator    = 20
+;   Giant Skyscraper       = 12
+;   Double Turbo Tower     = 13
+;   Air Base               = 16
+;   Artillery Depot        = 17
 ;
-; If Mini War changes its shop order, only this table should need updating.
+; The rest of the current shop is mapped from those confirmed positions.
 
 Items := [
-    ; -------------------------------------------------------------------------
     ; Factories
-    ; -------------------------------------------------------------------------
-    {name: "Wheat Farm",               category: "Factories", position: 2},
-    {name: "Corn Farm",                category: "Factories", position: 3},
-    {name: "Coal Cave",                category: "Factories", position: 4},
-    {name: "Tree Farm",                category: "Factories", position: 5},
-    {name: "Windmill",                 category: "Factories", position: 6},
-    {name: "Carrot Farm",              category: "Factories", position: 7},
-    {name: "Library",                  category: "Factories", position: 8},
-    {name: "Oil Rig",                  category: "Factories", position: 9},
-    {name: "Wood Plant",               category: "Factories", position: 10},
-    {name: "Iron Cave",                category: "Factories", position: 11},
-    {name: "Cement Plant",             category: "Factories", position: 12},
-    {name: "Gold Cave",                category: "Factories", position: 13},
-    {name: "Bank",                     category: "Factories", position: 14},
-    {name: "Research Labs",            category: "Factories", position: 15},
-    {name: "Diamond Cave",             category: "Factories", position: 16},
-    {name: "Uranium Cave",             category: "Factories", position: 17},
-    {name: "Nuclear Reactor",          category: "Factories", position: 18},
-    {name: "Data Center",              category: "Factories", position: 19},
-    {name: "Blackhole Generator",      category: "Factories", position: 20},
-    {name: "Area 51 Lab",              category: "Factories", position: 21},
-    {name: "Antimatter Reactor",       category: "Factories", position: 22},
-    {name: "Quantum Core Generator",   category: "Factories", position: 23},
-    {name: "Supernova Accelerator",    category: "Factories", position: 24},
-    {name: "Gamma Ray Generator",      category: "Factories", position: 25},
-    {name: "Anomaly Facility",         category: "Factories", position: 26},
+    {name: "Wheat Farm",               category: "Factories", downCount: 2},
+    {name: "Corn Farm",                category: "Factories", downCount: 3},
+    {name: "Coal Cave",                category: "Factories", downCount: 4},
+    {name: "Tree Farm",                category: "Factories", downCount: 5},
+    {name: "Windmill",                 category: "Factories", downCount: 6},
+    {name: "Carrot Farm",              category: "Factories", downCount: 7},
+    {name: "Library",                  category: "Factories", downCount: 8},
+    {name: "Oil Rig",                  category: "Factories", downCount: 9},
+    {name: "Wood Plant",               category: "Factories", downCount: 10},
+    {name: "Iron Cave",                category: "Factories", downCount: 11},
+    {name: "Cement Plant",             category: "Factories", downCount: 12},
+    {name: "Gold Cave",                category: "Factories", downCount: 13},
+    {name: "Bank",                     category: "Factories", downCount: 14},
+    {name: "Research Labs",            category: "Factories", downCount: 15},
+    {name: "Diamond Cave",             category: "Factories", downCount: 16},
+    {name: "Uranium Cave",             category: "Factories", downCount: 17},
+    {name: "Nuclear Reactor",          category: "Factories", downCount: 18},
+    {name: "Data Center",              category: "Factories", downCount: 19},
+    {name: "Blackhole Generator",      category: "Factories", downCount: 20},
+    {name: "Area 51 Lab",              category: "Factories", downCount: 21},
+    {name: "Antimatter Reactor",       category: "Factories", downCount: 22},
+    {name: "Quantum Core Generator",   category: "Factories", downCount: 23},
+    {name: "Supernova Accelerator",    category: "Factories", downCount: 24},
+    {name: "Gamma Ray Generator",      category: "Factories", downCount: 25},
+    {name: "Anomaly Facility",         category: "Factories", downCount: 26},
 
-    ; -------------------------------------------------------------------------
     ; Houses
-    ; -------------------------------------------------------------------------
-    {name: "Farm House",               category: "Houses", position: 2},
-    {name: "Small House",              category: "Houses", position: 3},
-    {name: "House",                    category: "Houses", position: 4},
-    {name: "Villa",                    category: "Houses", position: 5},
-    {name: "Apartment Building",       category: "Houses", position: 6},
-    {name: "Modern Block",             category: "Houses", position: 7},
-    {name: "Skyscraper",               category: "Houses", position: 8},
-    {name: "Helix Tower",              category: "Houses", position: 9},
-    {name: "The Manor",                category: "Houses", position: 10},
-    {name: "Hotel",                    category: "Houses", position: 11},
-    {name: "Giant Skyscraper",         category: "Houses", position: 12},
-    {name: "Double Turbo Tower",       category: "Houses", position: 13},
-    {name: "Grand Hotel",              category: "Houses", position: 14},
+    {name: "Farm House",               category: "Houses", downCount: 2},
+    {name: "Small House",              category: "Houses", downCount: 3},
+    {name: "House",                    category: "Houses", downCount: 4},
+    {name: "Villa",                    category: "Houses", downCount: 5},
+    {name: "Apartment Building",       category: "Houses", downCount: 6},
+    {name: "Modern Block",             category: "Houses", downCount: 7},
+    {name: "Skyscraper",               category: "Houses", downCount: 8},
+    {name: "Helix Tower",              category: "Houses", downCount: 9},
+    {name: "The Manor",                category: "Houses", downCount: 10},
+    {name: "Hotel",                    category: "Houses", downCount: 11},
+    {name: "Giant Skyscraper",         category: "Houses", downCount: 12},
+    {name: "Double Turbo Tower",       category: "Houses", downCount: 13},
+    {name: "Grand Hotel",              category: "Houses", downCount: 14},
 
-    ; -------------------------------------------------------------------------
     ; Military
-    ; -------------------------------------------------------------------------
-    {name: "Border Tower",             category: "Military", position: 1},
-    {name: "Barracks",                 category: "Military", position: 2},
-    {name: "Sniper Tower",             category: "Military", position: 3},
-    {name: "Vehicle Base",             category: "Military", position: 4},
-    {name: "Tank Base",                category: "Military", position: 5},
-    {name: "Heli Pad",                 category: "Military", position: 6},
-    {name: "Special Force",            category: "Military", position: 7},
-    {name: "Missile Hangar",           category: "Military", position: 8},
-    {name: "Hangar",                   category: "Military", position: 9},
-    {name: "Drone Facility",           category: "Military", position: 10},
-    {name: "Big Tank Base",            category: "Military", position: 11},
-    {name: "Big Hangar",               category: "Military", position: 12},
-    {name: "Missile Launcher",         category: "Military", position: 13},
-    {name: "Military Hospital",        category: "Military", position: 14},
-    {name: "General's Base",           category: "Military", position: 15},
-    {name: "Air Base",                 category: "Military", position: 16},
-    {name: "Artillery Depot",          category: "Military", position: 17},
-    {name: "Laser Drone Hive",         category: "Military", position: 18},
-    {name: "Rocket Bunker",            category: "Military", position: 19},
-    {name: "Mech Station",             category: "Military", position: 20},
-    {name: "Spider Base",              category: "Military", position: 21},
-    {name: "Air Fortress",             category: "Military", position: 22},
-    {name: "Plasma Rocket",            category: "Military", position: 23},
-    {name: "Plasma Hangar",            category: "Military", position: 24},
-    {name: "War Machine Facility",     category: "Military", position: 25}
+    {name: "Border Tower",             category: "Military", downCount: 1},
+    {name: "Barracks",                 category: "Military", downCount: 2},
+    {name: "Sniper Tower",             category: "Military", downCount: 3},
+    {name: "Vehicle Base",             category: "Military", downCount: 4},
+    {name: "Tank Base",                category: "Military", downCount: 5},
+    {name: "Heli Pad",                 category: "Military", downCount: 6},
+    {name: "Special Force",            category: "Military", downCount: 7},
+    {name: "Missile Hangar",           category: "Military", downCount: 8},
+    {name: "Hangar",                   category: "Military", downCount: 9},
+    {name: "Drone Facility",           category: "Military", downCount: 10},
+    {name: "Big Tank Base",            category: "Military", downCount: 11},
+    {name: "Big Hangar",               category: "Military", downCount: 12},
+    {name: "Missile Launcher",         category: "Military", downCount: 13},
+    {name: "Military Hospital",        category: "Military", downCount: 14},
+    {name: "General's Base",           category: "Military", downCount: 15},
+    {name: "Air Base",                 category: "Military", downCount: 16},
+    {name: "Artillery Depot",          category: "Military", downCount: 17},
+    {name: "Laser Drone Hive",         category: "Military", downCount: 18},
+    {name: "Rocket Bunker",            category: "Military", downCount: 19},
+    {name: "Mech Station",             category: "Military", downCount: 20},
+    {name: "Spider Base",              category: "Military", downCount: 21},
+    {name: "Air Fortress",             category: "Military", downCount: 22},
+    {name: "Plasma Rocket",            category: "Military", downCount: 23},
+    {name: "Plasma Hangar",            category: "Military", downCount: 24},
+    {name: "War Machine Facility",     category: "Military", downCount: 25}
 ]
 
 ; -----------------------------------------------------------------------------
@@ -116,112 +112,137 @@ IsRunning := false
 IsCycleActive := false
 IsStopRequested := false
 
+CategoryLists := Map()
+
 ; -----------------------------------------------------------------------------
 ; GUI
 ; -----------------------------------------------------------------------------
 
-MainGui := Gui("+MinSize540x530")
+MainGui := Gui("+MinSize600x545")
 MainGui.Title := "MiniWar AutoBuy"
 
 MainGui.SetFont("s10", "Segoe UI")
-MainGui.Add("Text", "xm w500", "Select the shop items you want purchased automatically.")
-MainGui.Add("Text", "xm y+4 w500", "F1 = Start / Stop     F2 = Exit")
+MainGui.Add("Text", "xm w560", "Select the Mini War shop items you want to purchase automatically.")
+MainGui.Add("Text", "xm y+4 w560", "F1 = Start / Stop     F2 = Exit")
 
-ShopTabs := MainGui.Add("Tab3", "xm y+14 w500 h350", ["Factories", "Houses", "Military"])
+ShopTabs := MainGui.Add(
+    "Tab3",
+    "xm y+14 w560 h365",
+    ["Factories", "Houses", "Military"]
+)
 
-BuildCategoryTab("Factories")
-BuildCategoryTab("Houses")
-BuildCategoryTab("Military")
+CreateShopList("Factories")
+CreateShopList("Houses")
+CreateShopList("Military")
 
 ShopTabs.UseTab()
 
-MainGui.Add("Text", "xm y+12 w500 0x10")
+SelectAllButton := MainGui.Add("Button", "xm y+14 w105 h32", "Select All")
+ClearAllButton := MainGui.Add("Button", "x+8 w105 h32", "Clear All")
+StartStopButton := MainGui.Add("Button", "x+8 w155 h32 Default", "Start AutoBuy")
 
-SelectAllButton := MainGui.Add("Button", "xm y+12 w105 h30", "Select All")
-ClearAllButton := MainGui.Add("Button", "x+8 w105 h30", "Clear All")
-StartStopButton := MainGui.Add("Button", "x+8 w150 h30 Default", "Start AutoBuy")
-
-StatusLabel := MainGui.Add("Text", "xm y+16 w500", "Status: Stopped")
-FocusLabel := MainGui.Add("Text", "xm y+5 w500", "Roblox focus required before starting.")
+StatusLabel := MainGui.Add("Text", "xm y+16 w560", "Status: Stopped")
+HintLabel := MainGui.Add(
+    "Text",
+    "xm y+5 w560",
+    "Start AutoBuy will switch focus to Roblox automatically."
+)
 
 SelectAllButton.OnEvent("Click", SelectAllItems)
 ClearAllButton.OnEvent("Click", ClearAllItems)
-StartStopButton.OnEvent("Click", ToggleAutoBuy)
+StartStopButton.OnEvent("Click", StartStopButtonClicked)
 MainGui.OnEvent("Close", (*) => ExitApp())
 
-MainGui.Show("w540 h530")
+MainGui.Show("w600 h545")
 
-BuildCategoryTab(Category) {
-    global MainGui, ShopTabs, Items
+CreateShopList(Category) {
+    global MainGui, ShopTabs, Items, CategoryLists
 
     ShopTabs.UseTab(Category)
 
-    CategoryItems := []
+    ShopList := MainGui.Add(
+        "ListView",
+        "x32 y102 w525 h310 Checked -Multi",
+        ["Item"]
+    )
+
+    ShopList.ModifyCol(1, 490)
 
     for Item in Items {
-        if Item.category = Category {
-            CategoryItems.Push(Item)
-        }
-    }
-
-    LeftColumnCount := Ceil(CategoryItems.Length / 2)
-
-    for Index, Item in CategoryItems {
-        if Index <= LeftColumnCount {
-            XPosition := "xm+24"
-            YPosition := Index = 1 ? "yp+44" : "y+8"
-        } else {
-            RightColumnIndex := Index - LeftColumnCount
-            XPosition := "xm+270"
-            YPosition := RightColumnIndex = 1 ? "yp+44" : "y+8"
+        if Item.category != Category {
+            continue
         }
 
-        Checkbox := MainGui.Add(
-            "Checkbox",
-            XPosition " " YPosition " w220",
-            Item.name
-        )
-
-        Item.checkbox := Checkbox
+        RowNumber := ShopList.Add("", Item.name)
+        Item.listView := ShopList
+        Item.rowNumber := RowNumber
     }
+
+    CategoryLists[Category] := ShopList
 }
 
 ; -----------------------------------------------------------------------------
 ; Hotkeys
 ; -----------------------------------------------------------------------------
 
-F1::ToggleAutoBuy()
+F1::ToggleAutoBuyFromHotkey()
 F2::ExitApp()
 
-; -----------------------------------------------------------------------------
-; Controller
-; -----------------------------------------------------------------------------
-
-ToggleAutoBuy(*) {
-    global IsRunning, IsCycleActive
+ToggleAutoBuyFromHotkey() {
+    global IsRunning
 
     if IsRunning {
         RequestStop()
         return
     }
 
-    if IsCycleActive {
+    StartAutoBuy(false)
+}
+
+StartStopButtonClicked(*) {
+    global IsRunning
+
+    if IsRunning {
+        RequestStop()
         return
     }
 
-    StartAutoBuy()
+    StartAutoBuy(true)
 }
 
-StartAutoBuy() {
-    global IsRunning, IsStopRequested, Settings
+; -----------------------------------------------------------------------------
+; Controller
+; -----------------------------------------------------------------------------
+
+StartAutoBuy(ShouldActivateRoblox) {
+    global IsRunning, IsCycleActive, IsStopRequested, Settings
+
+    if IsCycleActive {
+        return
+    }
 
     if !HasSelectedItems() {
         UpdateStatus("Select at least one item first.")
         return
     }
 
-    if !WinActive(Settings.robloxWindow) {
-        UpdateStatus("Roblox is not focused.")
+    if !WinExist(Settings.robloxWindow) {
+        UpdateStatus("Roblox is not running.")
+        return
+    }
+
+    if ShouldActivateRoblox {
+        UpdateStatus("Switching to Roblox...")
+        WinActivate(Settings.robloxWindow)
+
+        if !WinWaitActive(Settings.robloxWindow, , 2) {
+            UpdateStatus("Could not focus Roblox.")
+            return
+        }
+
+        Sleep(250)
+    } else if !WinActive(Settings.robloxWindow) {
+        UpdateStatus("Press F1 while Roblox is focused.")
         return
     }
 
@@ -231,14 +252,13 @@ StartAutoBuy() {
     UpdateStartStopButton()
     UpdateStatus("Running")
 
-    ; Launch separately so the F1 hotkey remains responsive.
+    ; Run outside the initiating hotkey/click thread.
     SetTimer(RunPurchaseCycle, -1)
 }
 
 RequestStop() {
     global IsRunning, IsCycleActive, IsStopRequested
 
-    ; Cancel a future scheduled cycle.
     SetTimer(RunPurchaseCycle, 0)
 
     if IsCycleActive {
@@ -254,7 +274,7 @@ RequestStop() {
     UpdateStatus("Stopped")
 }
 
-StopImmediatelyWithStatus(Message) {
+StopImmediately(Message) {
     global IsRunning, IsStopRequested
 
     SetTimer(RunPurchaseCycle, 0)
@@ -267,25 +287,26 @@ StopImmediatelyWithStatus(Message) {
 }
 
 RunPurchaseCycle() {
-    global IsRunning, IsCycleActive, IsStopRequested, Items, Settings
+    global Items, Settings
+    global IsRunning, IsCycleActive, IsStopRequested
 
     if !IsRunning || IsCycleActive {
         return
     }
 
     IsCycleActive := true
-    DidPurchaseItem := false
+    PurchasedAnything := false
 
     for Item in Items {
         if !IsRunning || IsStopRequested {
             break
         }
 
-        if !Item.checkbox.Value {
+        if !IsItemSelected(Item) {
             continue
         }
 
-        DidPurchaseItem := true
+        PurchasedAnything := true
         UpdateStatus("Buying " Item.name "...")
 
         if !PurchaseItem(Item) {
@@ -304,7 +325,6 @@ RunPurchaseCycle() {
     if IsStopRequested {
         IsRunning := false
         IsStopRequested := false
-
         UpdateStartStopButton()
         UpdateStatus("Stopped")
         return
@@ -314,17 +334,22 @@ RunPurchaseCycle() {
         return
     }
 
-    if !DidPurchaseItem {
-        StopImmediatelyWithStatus("No items are selected.")
+    if !PurchasedAnything {
+        StopImmediately("No items are selected.")
         return
     }
 
-    UpdateStatus("Running - next cycle in " Round(Settings.cycleDelay / 1000) "s")
+    UpdateStatus(
+        "Running - next cycle in "
+        Round(Settings.cycleDelay / 1000)
+        "s"
+    )
+
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
 }
 
 ; -----------------------------------------------------------------------------
-; Purchase Engine
+; Known-Good v1 Purchase Sequence
 ; -----------------------------------------------------------------------------
 
 PurchaseItem(Item) {
@@ -332,114 +357,179 @@ PurchaseItem(Item) {
         return false
     }
 
-    if !SelectCategory(Item.category) {
+    if !OpenCategory(Item.category) {
         return false
     }
 
-    if !SelectShopItem(Item.position) {
+    if !NavigateToItem(Item.downCount) {
         return false
     }
 
-    if !ConfirmPurchase() {
-        return false
-    }
-
-    return true
+    return CompletePurchase()
 }
 
 OpenShop() {
-    global Settings
-
     if !SendToRoblox("\") {
         return false
     }
 
-    if !SendRepeatedToRoblox("{Left}", 3, Settings.navigationDelay) {
+    Loop 3 {
+        if !SendToRoblox("{Left}") {
+            return false
+        }
+    }
+
+    if !SendToRoblox("{Enter}") {
         return false
     }
 
-    if !SendToRoblox("{Enter}", Settings.menuEntryDelay) {
+    Sleep(1000)
+
+    if !SendToRoblox("e") {
         return false
     }
 
-    if !SendToRoblox("e", Settings.menuOpenDelay) {
-        return false
-    }
+    Sleep(4000)
 
-    return SendToRoblox("{Down}", Settings.navigationDelay)
+    return true
 }
 
-SelectCategory(Category) {
-    global Settings
-
+OpenCategory(Category) {
     switch Category {
         case "Factories":
-            return SendToRoblox("{Enter}", Settings.navigationDelay)
+            if !SendToRoblox("{Down}") {
+                return false
+            }
+
+            Sleep(100)
+
+            if !SendToRoblox("{Enter}") {
+                return false
+            }
+
+            Sleep(100)
+            return true
 
         case "Houses":
-            if !SendToRoblox("{Right}", Settings.categoryNavigationDelay) {
+            if !SendToRoblox("{Down}") {
                 return false
             }
 
-            return SendToRoblox("{Enter}", Settings.categoryNavigationDelay)
+            Sleep(500)
+
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            Sleep(500)
+
+            if !SendToRoblox("{Enter}") {
+                return false
+            }
+
+            Sleep(500)
+            return true
 
         case "Military":
-            if !SendRepeatedToRoblox("{Right}", 2, Settings.categoryNavigationDelay) {
+            if !SendToRoblox("{Down}") {
                 return false
             }
 
-            return SendToRoblox("{Enter}", Settings.categoryNavigationDelay)
+            Sleep(500)
+
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            Sleep(500)
+
+            if !SendToRoblox("{Enter}") {
+                return false
+            }
+
+            Sleep(500)
+            return true
 
         default:
-            StopImmediatelyWithStatus("Unknown category: " Category)
+            StopImmediately("Unknown category: " Category)
             return false
     }
 }
 
-SelectShopItem(Position) {
-    global Settings
+NavigateToItem(DownCount) {
+    Loop DownCount {
+        Sleep(100)
 
-    if !SendRepeatedToRoblox("{Down}", Position, Settings.navigationDelay) {
+        if !SendToRoblox("{Down}") {
+            return false
+        }
+    }
+
+    if !SendToRoblox("{Right}") {
         return false
     }
 
-    if !SendToRoblox("{Right}", Settings.navigationDelay) {
+    Sleep(100)
+
+    if !SendToRoblox("{Enter}") {
         return false
     }
 
-    return SendToRoblox("{Enter}", Settings.navigationDelay)
+    Sleep(100)
+
+    return true
 }
 
-ConfirmPurchase() {
-    global Settings
-
-    if !SendToRoblox("{Right}", Settings.navigationDelay) {
+CompletePurchase() {
+    if !SendToRoblox("{Right}") {
         return false
     }
 
-    if !SendRepeatedToRoblox("{Up}", 3, Settings.navigationDelay) {
+    Loop 3 {
+        if !SendToRoblox("{Up}") {
+            return false
+        }
+    }
+
+    if !SendToRoblox("{Left}") {
         return false
     }
 
-    if !SendRepeatedToRoblox("{Left}", 2, Settings.navigationDelay) {
+    Sleep(100)
+
+    if !SendToRoblox("{Left}") {
         return false
     }
 
-    if !SendToRoblox("{Down}", Settings.navigationDelay) {
+    Sleep(100)
+
+    if !SendToRoblox("{Down}") {
         return false
     }
 
-    if !SendToRoblox("{Enter}", Settings.navigationDelay) {
+    Sleep(100)
+
+    if !SendToRoblox("{Enter}") {
         return false
     }
 
-    if !SendToRoblox("{Left}", Settings.navigationDelay) {
+    Sleep(100)
+
+    if !SendToRoblox("{Left}") {
         return false
     }
 
-    if !SendToRoblox("{Enter}", Settings.navigationDelay) {
+    Sleep(100)
+
+    if !SendToRoblox("{Enter}") {
         return false
     }
+
+    Sleep(100)
 
     return SendToRoblox("\")
 }
@@ -448,7 +538,7 @@ ConfirmPurchase() {
 ; Input Safety
 ; -----------------------------------------------------------------------------
 
-SendToRoblox(Keys, DelayAfter := 0) {
+SendToRoblox(Keys) {
     global IsRunning, Settings
 
     if !IsRunning {
@@ -456,26 +546,11 @@ SendToRoblox(Keys, DelayAfter := 0) {
     }
 
     if !WinActive(Settings.robloxWindow) {
-        StopImmediatelyWithStatus("Stopped - Roblox lost focus.")
+        StopImmediately("Stopped - Roblox lost focus.")
         return false
     }
 
     Send(Keys)
-
-    if DelayAfter > 0 {
-        Sleep(DelayAfter)
-    }
-
-    return true
-}
-
-SendRepeatedToRoblox(Keys, Count, DelayAfterEach := 0) {
-    Loop Count {
-        if !SendToRoblox(Keys, DelayAfterEach) {
-            return false
-        }
-    }
-
     return true
 }
 
@@ -483,37 +558,45 @@ SendRepeatedToRoblox(Keys, Count, DelayAfterEach := 0) {
 ; Selection Helpers
 ; -----------------------------------------------------------------------------
 
-SelectAllItems(*) {
-    global Items
-
-    for Item in Items {
-        Item.checkbox.Value := 1
-    }
-}
-
-ClearAllItems(*) {
-    global Items, IsRunning
-
-    if IsRunning {
-        UpdateStatus("Stop AutoBuy before clearing the selection.")
-        return
-    }
-
-    for Item in Items {
-        Item.checkbox.Value := 0
-    }
+IsItemSelected(Item) {
+    return Item.listView.GetNext(Item.rowNumber - 1, "C") = Item.rowNumber
 }
 
 HasSelectedItems() {
     global Items
 
     for Item in Items {
-        if Item.checkbox.Value {
+        if IsItemSelected(Item) {
             return true
         }
     }
 
     return false
+}
+
+SelectAllItems(*) {
+    global CategoryLists
+
+    for Category, ShopList in CategoryLists {
+        Loop ShopList.GetCount() {
+            ShopList.Modify(A_Index, "Check")
+        }
+    }
+}
+
+ClearAllItems(*) {
+    global CategoryLists, IsRunning
+
+    if IsRunning {
+        UpdateStatus("Stop AutoBuy before clearing selections.")
+        return
+    }
+
+    for Category, ShopList in CategoryLists {
+        Loop ShopList.GetCount() {
+            ShopList.Modify(A_Index, "-Check")
+        }
+    }
 }
 
 ; -----------------------------------------------------------------------------
@@ -528,6 +611,5 @@ UpdateStartStopButton() {
 
 UpdateStatus(Message) {
     global StatusLabel
-
     StatusLabel.Text := "Status: " Message
 }
