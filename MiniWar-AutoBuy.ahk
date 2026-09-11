@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.3.4 Fast Test Build
+; v2.4.0 Bulk Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.3.4-fast-test"
+AppVersion := "v2.4.0-bulk-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -22,7 +22,7 @@ Settings := {
 
     ; Runtime settings. These are updated from the Settings panel.
     cycleDelay: 20000,
-    betweenItemsDelay: 300,
+    betweenItemsDelay: 150,
     autoFocusRoblox: true,
     rememberSelections: true,
 
@@ -629,25 +629,96 @@ RunPurchaseCycle() {
 
     IsCycleActive := true
 
-    for Index, Item in SelectedItems {
+    Categories := ["Factories", "Houses", "Military"]
+    TotalSelected := SelectedItems.Length
+    OverallIndex := 0
+
+    for Category in Categories {
         if !IsRunning || IsStopRequested {
             break
         }
 
-        UpdateStatus("Buying " Item.name "...")
-        UpdateCurrentProgress(
-            Item.name,
-            Index " of " SelectedItems.Length
-        )
+        CategoryItems := []
 
-        PurchaseAttempts += 1
-        UpdateStatsDisplay()
+        for Item in SelectedItems {
+            if Item.category = Category {
+                CategoryItems.Push(Item)
+            }
+        }
 
-        if !PurchaseItem(Item) {
+        if CategoryItems.Length = 0 {
+            continue
+        }
+
+        UpdateStatus("Opening " Category "...")
+
+        if !OpenShop() {
             break
         }
 
-        if IsStopRequested {
+        if !OpenCategory(Category) {
+            break
+        }
+
+        ; Navigate from the category's starting focus to the first selected item.
+        FirstItem := CategoryItems[1]
+
+        if !NavigateToPurchaseButton(FirstItem.downCount) {
+            break
+        }
+
+        PreviousDownCount := FirstItem.downCount
+
+        for CategoryIndex, Item in CategoryItems {
+            if !IsRunning || IsStopRequested {
+                break
+            }
+
+            OverallIndex += 1
+
+            ; After a purchase, focus remains on that item's green cash button.
+            ; Moving Down advances directly to the next item's cash button.
+            if CategoryIndex > 1 {
+                StepsDown := Item.downCount - PreviousDownCount
+
+                if StepsDown < 1 {
+                    StopImmediately("Invalid shop order for " Item.name ".")
+                    break
+                }
+
+                if !MoveDownThroughShop(StepsDown) {
+                    break
+                }
+            }
+
+            UpdateStatus("Buying " Item.name "...")
+            UpdateCurrentProgress(
+                Item.name,
+                OverallIndex " of " TotalSelected
+            )
+
+            PurchaseAttempts += 1
+            UpdateStatsDisplay()
+
+            if !PurchaseAvailableStock() {
+                break
+            }
+
+            PreviousDownCount := Item.downCount
+
+            if IsStopRequested {
+                break
+            }
+
+            Sleep(Settings.betweenItemsDelay)
+        }
+
+        if !IsRunning || IsStopRequested {
+            break
+        }
+
+        ; Close/reset only once after the entire category, not after every item.
+        if !CompletePurchaseReset() {
             break
         }
 
@@ -684,42 +755,34 @@ RunPurchaseCycle() {
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
 }
 
+MoveDownThroughShop(Count) {
+    global Settings
+
+    Loop Count {
+        if !SendToRoblox("{Down}") {
+            return false
+        }
+
+        Sleep(Settings.navigationDelay)
+    }
+
+    return true
+}
+
 ; -----------------------------------------------------------------------------
 ; Purchase Engine
 ; -----------------------------------------------------------------------------
 ;
-; Shop opening, category movement, item down-count navigation, and reset
-; navigation retain the proven v2.1 sequence.
+; v2.4 bulk mode:
+;   - open the shop once per selected category;
+;   - navigate to the first selected item;
+;   - buy its available stock;
+;   - move Down directly between selected item cash buttons;
+;   - close/reset once at the end of that category.
 ;
-; The purchase-button step is the only intentional behavioral change:
-;   1. Stay focused on the cash purchase button.
-;   2. Press Enter repeatedly when full-stock mode is enabled.
-;   3. Wait longer for the purchase to register.
-;
-; This fixes:
-;   - only buying one unit from a multi-stock listing;
-;   - single-selected-item runs moving correctly but failing to register a buy.
+; The screenshots confirmed that after buying an item, focus remains on the
+; same green cash button and one Down moves to the next item's cash button.
 ; -----------------------------------------------------------------------------
-
-PurchaseItem(Item) {
-    if !OpenShop() {
-        return false
-    }
-
-    if !OpenCategory(Item.category) {
-        return false
-    }
-
-    if !NavigateToPurchaseButton(Item.downCount) {
-        return false
-    }
-
-    if !PurchaseAvailableStock() {
-        return false
-    }
-
-    return CompletePurchaseReset()
-}
 
 OpenShop() {
     global Settings
@@ -950,7 +1013,7 @@ ApplySettingsFromGui() {
 
     BetweenItemsValue := ReadClampedInteger(
         BetweenItemsEdit,
-        300,
+        150,
         100,
         5000
     )
@@ -1012,7 +1075,7 @@ LoadPreferences() {
         100,
         Min(
             5000,
-            IniRead(ConfigFile, "Settings", "BetweenItemsMs", "300") + 0
+            IniRead(ConfigFile, "Settings", "BetweenItemsMs", "150") + 0
         )
     )
 
