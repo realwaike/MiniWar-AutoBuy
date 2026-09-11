@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.5.4 Navigation Reset Test Build
+; v2.5.5 Category Memory Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.5.4-nav-reset-test"
+AppVersion := "v2.5.5-category-memory-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -152,6 +152,11 @@ IsRunning := false
 IsCycleActive := false
 IsStopRequested := false
 IsRefreshingLists := false
+
+; Roblox remembers the last visible shop category after the shop closes.
+; Track the category we last selected so the next reopen can navigate relative
+; to the category Roblox is actually showing.
+CurrentShopCategory := ""
 
 CyclesCompleted := 0
 PurchaseAttempts := 0
@@ -818,71 +823,62 @@ OpenShop() {
 }
 
 OpenCategory(Category) {
-    global Settings
+    global Settings, CurrentShopCategory
 
-    switch Category {
-        case "Factories":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.navigationDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.navigationDelay)
-            return true
-
-        case "Houses":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-            return true
-
-        case "Military":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-            return true
-
-        default:
-            StopImmediately("Unknown category: " Category)
-            return false
+    ; After OpenShop(), Down moves from the shop header area to the currently
+    ; selected category tab. Roblox keeps the previously selected tab between
+    ; closes/reopens, so horizontal movement must be relative to that tab.
+    if !SendToRoblox("{Down}") {
+        return false
     }
+
+    Sleep(Settings.navigationDelay)
+
+    CategoryPositions := Map(
+        "Factories", 1,
+        "Houses", 2,
+        "Military", 3
+    )
+
+    if !CategoryPositions.Has(Category) {
+        StopImmediately("Unknown category: " Category)
+        return false
+    }
+
+    ; On the first category of the first run, the proven working flow starts
+    ; from Factory. From then on, we know exactly which tab Roblox remembers.
+    CurrentCategory := CurrentShopCategory != "" ? CurrentShopCategory : "Factories"
+
+    CurrentPosition := CategoryPositions[CurrentCategory]
+    TargetPosition := CategoryPositions[Category]
+    Difference := TargetPosition - CurrentPosition
+
+    if Difference > 0 {
+        Loop Difference {
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+        }
+    } else if Difference < 0 {
+        Loop Abs(Difference) {
+            if !SendToRoblox("{Left}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+        }
+    }
+
+    if !SendToRoblox("{Enter}") {
+        return false
+    }
+
+    Sleep(Settings.categoryDelay)
+
+    CurrentShopCategory := Category
+    return true
 }
 
 NavigateToPurchaseButton(DownCount) {
