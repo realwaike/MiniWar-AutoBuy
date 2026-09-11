@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.5.5 Category Memory Test Build
+; v2.5.6 Military Sync Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.5.5-category-memory-test"
+AppVersion := "v2.5.6-military-sync-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -48,7 +48,11 @@ Settings := {
     ; Shop safety / fast fixed-stock purchasing.
     shopGuardEnabled: true,
     fixedPurchaseDelay: 90,
-    shopCloseDelay: 180
+    shopCloseDelay: 180,
+
+    ; Military tab needs a little more time than Factory/Houses to settle.
+    militaryTabMoveDelay: 500,
+    militaryTabEnterDelay: 350
 }
 
 ; -----------------------------------------------------------------------------
@@ -826,8 +830,7 @@ OpenCategory(Category) {
     global Settings, CurrentShopCategory
 
     ; After OpenShop(), Down moves from the shop header area to the currently
-    ; selected category tab. Roblox keeps the previously selected tab between
-    ; closes/reopens, so horizontal movement must be relative to that tab.
+    ; selected category tab. Roblox remembers the previously selected tab.
     if !SendToRoblox("{Down}") {
         return false
     }
@@ -845,8 +848,6 @@ OpenCategory(Category) {
         return false
     }
 
-    ; On the first category of the first run, the proven working flow starts
-    ; from Factory. From then on, we know exactly which tab Roblox remembers.
     CurrentCategory := CurrentShopCategory != "" ? CurrentShopCategory : "Factories"
 
     CurrentPosition := CategoryPositions[CurrentCategory]
@@ -859,7 +860,13 @@ OpenCategory(Category) {
                 return false
             }
 
-            Sleep(Settings.categoryDelay)
+            ; The transition into Military is the only one that needs a larger
+            ; pause. Factory/Houses keep the fast timing that already works.
+            if Category = "Military" {
+                Sleep(Settings.militaryTabMoveDelay)
+            } else {
+                Sleep(Settings.categoryDelay)
+            }
         }
     } else if Difference < 0 {
         Loop Abs(Difference) {
@@ -871,11 +878,21 @@ OpenCategory(Category) {
         }
     }
 
+    ; Military gets an additional settle period before Enter so Roblox has
+    ; time to move the UI-navigation highlight onto the Military tab.
+    if Category = "Military" {
+        Sleep(Settings.militaryTabEnterDelay)
+    }
+
     if !SendToRoblox("{Enter}") {
         return false
     }
 
-    Sleep(Settings.categoryDelay)
+    if Category = "Military" {
+        Sleep(Settings.militaryTabEnterDelay)
+    } else {
+        Sleep(Settings.categoryDelay)
+    }
 
     CurrentShopCategory := Category
     return true
