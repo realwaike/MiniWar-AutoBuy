@@ -3,11 +3,10 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.1
+; v2.2
 ;
-; Restores the known-good v1 purchase sequence, adds the complete current
-; Mini War shop list, and replaces the v2 checkbox layout with reliable
-; category ListViews.
+; Polished GUI release built on the known-good v2.1 purchase engine.
+; The purchase/navigation logic remains unchanged.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -118,16 +117,39 @@ CategoryLists := Map()
 ; GUI
 ; -----------------------------------------------------------------------------
 
-MainGui := Gui("+MinSize600x545")
-MainGui.Title := "MiniWar AutoBuy"
+AppVersion := "v2.2"
 
-MainGui.SetFont("s10", "Segoe UI")
-MainGui.Add("Text", "xm w560", "Select the Mini War shop items you want to purchase automatically.")
-MainGui.Add("Text", "xm y+4 w560", "F1 = Start / Stop     F2 = Exit")
+MainGui := Gui("+MinSize680x610")
+MainGui.Title := "MiniWar AutoBuy " AppVersion
+MainGui.MarginX := 20
+MainGui.MarginY := 18
 
+; Header
+MainGui.SetFont("s16 Bold", "Segoe UI")
+MainGui.Add("Text", "xm ym w490 h30", "MiniWar AutoBuy")
+
+MainGui.SetFont("s9 Norm", "Segoe UI")
+VersionLabel := MainGui.Add("Text", "x+18 yp+5 w110 Right", AppVersion)
+
+MainGui.SetFont("s10 Norm", "Segoe UI")
+MainGui.Add(
+    "Text",
+    "xm y+3 w630",
+    "Choose the shop items you want MiniWar AutoBuy to purchase each cycle."
+)
+
+MainGui.SetFont("s9 Norm", "Segoe UI")
+MainGui.Add(
+    "Text",
+    "xm y+4 w630",
+    "The purchase engine is unchanged from the working v2.1 build."
+)
+
+; Shop selection
+MainGui.SetFont("s10 Norm", "Segoe UI")
 ShopTabs := MainGui.Add(
     "Tab3",
-    "xm y+14 w560 h365",
+    "xm y+18 w640 h400",
     ["Factories", "Houses", "Military"]
 )
 
@@ -137,15 +159,30 @@ CreateShopList("Military")
 
 ShopTabs.UseTab()
 
-SelectAllButton := MainGui.Add("Button", "xm y+14 w105 h32", "Select All")
-ClearAllButton := MainGui.Add("Button", "x+8 w105 h32", "Clear All")
-StartStopButton := MainGui.Add("Button", "x+8 w155 h32 Default", "Start AutoBuy")
+; Selection summary + utility buttons
+MainGui.SetFont("s9 Norm", "Segoe UI")
+SelectionLabel := MainGui.Add("Text", "xm y+15 w250 h24", "Selected: 0 items")
 
-StatusLabel := MainGui.Add("Text", "xm y+16 w560", "Status: Stopped")
+SelectAllButton := MainGui.Add("Button", "x+64 yp-4 w110 h32", "Select All")
+ClearAllButton := MainGui.Add("Button", "x+8 yp w110 h32", "Clear All")
+
+; Primary action
+MainGui.SetFont("s10 Bold", "Segoe UI")
+StartStopButton := MainGui.Add(
+    "Button",
+    "xm y+14 w640 h38 Default",
+    "Start AutoBuy"
+)
+
+; Status area
+MainGui.SetFont("s10 Bold", "Segoe UI")
+StatusLabel := MainGui.Add("Text", "xm y+14 w640 h23", "Status: Stopped")
+
+MainGui.SetFont("s9 Norm", "Segoe UI")
 HintLabel := MainGui.Add(
     "Text",
-    "xm y+5 w560",
-    "Start AutoBuy will switch focus to Roblox automatically."
+    "xm y+2 w640 h20",
+    "F1  Start / Stop     •     F2  Exit     •     Start automatically focuses Roblox"
 )
 
 SelectAllButton.OnEvent("Click", SelectAllItems)
@@ -153,7 +190,8 @@ ClearAllButton.OnEvent("Click", ClearAllItems)
 StartStopButton.OnEvent("Click", StartStopButtonClicked)
 MainGui.OnEvent("Close", (*) => ExitApp())
 
-MainGui.Show("w600 h545")
+MainGui.Show("w680 h610")
+RefreshSelectionSummary()
 
 CreateShopList(Category) {
     global MainGui, ShopTabs, Items, CategoryLists
@@ -162,11 +200,11 @@ CreateShopList(Category) {
 
     ShopList := MainGui.Add(
         "ListView",
-        "x32 y102 w525 h310 Checked -Multi",
-        ["Item"]
+        "x40 y142 w600 h330 Checked -Multi Grid",
+        ["Shop Item"]
     )
 
-    ShopList.ModifyCol(1, 490)
+    ShopList.ModifyCol(1, 565)
 
     for Item in Items {
         if Item.category != Category {
@@ -178,7 +216,24 @@ CreateShopList(Category) {
         Item.rowNumber := RowNumber
     }
 
+    ; Refresh the count immediately after a checkbox changes.
+    ShopList.OnEvent("ItemCheck", (*) => SetTimer(RefreshSelectionSummary, -1))
+
     CategoryLists[Category] := ShopList
+}
+
+RefreshSelectionSummary() {
+    global Items, SelectionLabel
+
+    SelectedCount := 0
+
+    for Item in Items {
+        if IsItemSelected(Item) {
+            SelectedCount += 1
+        }
+    }
+
+    SelectionLabel.Text := "Selected: " SelectedCount " item" (SelectedCount = 1 ? "" : "s")
 }
 
 ; -----------------------------------------------------------------------------
@@ -582,6 +637,8 @@ SelectAllItems(*) {
             ShopList.Modify(A_Index, "Check")
         }
     }
+
+    RefreshSelectionSummary()
 }
 
 ClearAllItems(*) {
@@ -597,6 +654,8 @@ ClearAllItems(*) {
             ShopList.Modify(A_Index, "-Check")
         }
     }
+
+    RefreshSelectionSummary()
 }
 
 ; -----------------------------------------------------------------------------
