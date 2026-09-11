@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.4.0 Bulk Test Build
+; v2.5.0 Intelligent Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.4.0-bulk-test"
+AppVersion := "v2.5.0-intelligent-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -43,7 +43,13 @@ Settings := {
     navigationDelay: 60,
     itemFocusDelay: 90,
     resetDelay: 65,
-    autoFocusDelay: 150
+    autoFocusDelay: 150,
+
+    ; Visual safety / intelligent stock.
+    shopGuardEnabled: true,
+    intelligentStock: true,
+    stockProbeDelay: 130,
+    shopCloseDelay: 180
 }
 
 ; -----------------------------------------------------------------------------
@@ -303,7 +309,7 @@ MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x835 y607 w285 h38",
-    "Repeat: 5–600 sec   •   Between items: 100–5000 ms"
+    "Adaptive stock: ON   •   Shop guard: ON   •   Max stock safety: 8"
 )
 
 ; Primary action --------------------------------------------------------------
@@ -717,8 +723,8 @@ RunPurchaseCycle() {
             break
         }
 
-        ; Close/reset only once after the entire category, not after every item.
-        if !CompletePurchaseReset() {
+        ; Close safely once after the entire category.
+        if !CloseShopSafely() {
             break
         }
 
@@ -910,16 +916,226 @@ PurchaseAvailableStock() {
             return true
         }
 
+        if Settings.shopGuardEnabled && !IsShopVisible() {
+            StopImmediately("Shop lost - AutoBuy stopped for safety.")
+            return false
+        }
+
+        if Settings.intelligentStock {
+            ButtonState := GetFocusedCashButtonState()
+
+            if ButtonState = "disabled" {
+                return true
+            }
+
+            if ButtonState = "missing" {
+                StopImmediately("Purchase button lost - AutoBuy stopped for safety.")
+                return false
+            }
+        }
+
         if !SendToRoblox("{Enter}") {
             return false
         }
 
-        Sleep(Settings.purchaseClickDelay)
+        Sleep(Settings.stockProbeDelay)
+
+        if Settings.intelligentStock {
+            ButtonState := GetFocusedCashButtonState()
+
+            if ButtonState = "disabled" {
+                return true
+            }
+
+            if ButtonState = "missing" {
+                StopImmediately("Purchase button lost - AutoBuy stopped for safety.")
+                return false
+            }
+        } else {
+            Sleep(Settings.purchaseClickDelay)
+        }
     }
 
     Sleep(Settings.purchaseSettleDelay)
+    return true
+}
+
+CloseShopSafely() {
+    global Settings
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
+        return false
+    }
+
+    CloseX := ClientX + Round(ClientWidth * 0.735)
+    CloseY := ClientY + Round(ClientHeight * 0.215)
+
+    Click(CloseX, CloseY)
+    Sleep(Settings.shopCloseDelay)
 
     return true
+}
+
+IsShopVisible() {
+    global Settings
+
+    if !WinActive(Settings.robloxWindow) {
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    HeaderLeft := ClientX + Round(ClientWidth * 0.22)
+    HeaderTop := ClientY + Round(ClientHeight * 0.14)
+    HeaderRight := ClientX + Round(ClientWidth * 0.50)
+    HeaderBottom := ClientY + Round(ClientHeight * 0.27)
+
+    CloseLeft := ClientX + Round(ClientWidth * 0.68)
+    CloseTop := ClientY + Round(ClientHeight * 0.14)
+    CloseRight := ClientX + Round(ClientWidth * 0.78)
+    CloseBottom := ClientY + Round(ClientHeight * 0.28)
+
+    HasBlueHeader := PixelSearch(
+        &FoundHeaderX,
+        &FoundHeaderY,
+        HeaderLeft,
+        HeaderTop,
+        HeaderRight,
+        HeaderBottom,
+        0x55BFEA,
+        85
+    )
+
+    HasRedClose := PixelSearch(
+        &FoundCloseX,
+        &FoundCloseY,
+        CloseLeft,
+        CloseTop,
+        CloseRight,
+        CloseBottom,
+        0xE83434,
+        85
+    )
+
+    return HasBlueHeader && HasRedClose
+}
+
+GetFocusedCashButtonState() {
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return "missing"
+    }
+
+    ExpectedBorderX := ClientX + Round(ClientWidth * 0.609)
+    SearchTop := ClientY + Round(ClientHeight * 0.40)
+    SearchBottom := ClientY + Round(ClientHeight * 0.79)
+
+    BorderStartY := 0
+    BorderX := 0
+
+    Loop 17 {
+        Offset := A_Index - 9
+        TestX := ExpectedBorderX + Offset
+
+        ConsecutiveWhite := 0
+        RunStart := 0
+        Y := SearchTop
+
+        while Y <= SearchBottom {
+            Color := PixelGetColor(TestX, Y, "RGB")
+
+            Red := (Color >> 16) & 0xFF
+            Green := (Color >> 8) & 0xFF
+            Blue := Color & 0xFF
+
+            IsWhiteBorder := Red >= 225 && Green >= 225 && Blue >= 225
+
+            if IsWhiteBorder {
+                if ConsecutiveWhite = 0 {
+                    RunStart := Y
+                }
+
+                ConsecutiveWhite += 1
+
+                if ConsecutiveWhite >= 14 {
+                    BorderStartY := RunStart
+                    BorderX := TestX
+                    break
+                }
+            } else {
+                ConsecutiveWhite := 0
+                RunStart := 0
+            }
+
+            Y += 2
+        }
+
+        if BorderStartY {
+            break
+        }
+    }
+
+    if !BorderStartY {
+        return "missing"
+    }
+
+    SampleX1 := BorderX + Round(ClientWidth * 0.030)
+    SampleX2 := BorderX + Round(ClientWidth * 0.055)
+    SampleY1 := BorderStartY + Round(ClientHeight * 0.025)
+    SampleY2 := BorderStartY + Round(ClientHeight * 0.045)
+
+    AverageRed := 0
+    AverageGreen := 0
+    AverageBlue := 0
+    SampleCount := 0
+
+    for SampleX in [SampleX1, SampleX2] {
+        for SampleY in [SampleY1, SampleY2] {
+            Color := PixelGetColor(SampleX, SampleY, "RGB")
+
+            AverageRed += (Color >> 16) & 0xFF
+            AverageGreen += (Color >> 8) & 0xFF
+            AverageBlue += Color & 0xFF
+            SampleCount += 1
+        }
+    }
+
+    AverageRed := AverageRed / SampleCount
+    AverageGreen := AverageGreen / SampleCount
+    AverageBlue := AverageBlue / SampleCount
+
+    IsEnabled := (
+        AverageGreen >= 105
+        && AverageGreen >= AverageRed * 1.15
+        && AverageGreen >= AverageBlue * 1.10
+    )
+
+    return IsEnabled ? "enabled" : "disabled"
+}
+
+GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+    global Settings
+
+    try {
+        WinGetClientPos(
+            &ClientX,
+            &ClientY,
+            &ClientWidth,
+            &ClientHeight,
+            Settings.robloxWindow
+        )
+
+        return ClientWidth > 0 && ClientHeight > 0
+    } catch {
+        return false
+    }
 }
 
 CompletePurchaseReset() {
