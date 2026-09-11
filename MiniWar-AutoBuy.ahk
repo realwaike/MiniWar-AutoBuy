@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.6.0-anchor-test"
+AppVersion := "v2.6.2-anchor-ui-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -444,6 +444,162 @@ RepeatModeChanged(*) {
         RepeatModeDropdown.Text
     )
 }
+
+; GUI / Shop Browser
+; -----------------------------------------------------------------------------
+
+CategoryChanged(*) {
+    global CategoryDropdown, ActiveCategory
+    global SelectCategoryButton, ClearCategoryButton
+
+    ActiveCategory := CategoryDropdown.Text
+
+    SelectCategoryButton.Text := "Select All " ActiveCategory
+    ClearCategoryButton.Text := "Clear " ActiveCategory
+
+    RebuildShopList()
+}
+
+RebuildShopList(*) {
+    global Items, ShopList, VisibleShopItems
+    global SearchEdit, ActiveCategory, IsRefreshingLists
+    global CategorySummaryLabel
+
+    SearchText := StrLower(Trim(SearchEdit.Value))
+
+    IsRefreshingLists := true
+    ShopList.Delete()
+    VisibleShopItems := []
+
+    CategoryTotal := 0
+    VisibleCount := 0
+    SelectedInCategory := 0
+
+    for Item in Items {
+        if Item.category != ActiveCategory {
+            continue
+        }
+
+        CategoryTotal += 1
+
+        if Item.selected {
+            SelectedInCategory += 1
+        }
+
+        if SearchText != "" && !InStr(StrLower(Item.name), SearchText) {
+            continue
+        }
+
+        RowOptions := Item.selected ? "Check" : ""
+        ShopList.Add(RowOptions, Item.name)
+        VisibleShopItems.Push(Item)
+        VisibleCount += 1
+    }
+
+    ShopList.ModifyCol(1, 680)
+    IsRefreshingLists := false
+
+    if SearchText = "" {
+        CategorySummaryLabel.Text := (
+            ActiveCategory
+            "  •  "
+            CategoryTotal
+            " items  •  "
+            SelectedInCategory
+            " selected"
+        )
+    } else {
+        CategorySummaryLabel.Text := (
+            ActiveCategory
+            "  •  "
+            VisibleCount
+            " matching  •  "
+            SelectedInCategory
+            " selected total"
+        )
+    }
+
+    RefreshSelectionSummary()
+}
+
+OnShopItemCheck(Ctrl, Row, Checked) {
+    global VisibleShopItems, IsRefreshingLists
+
+    if IsRefreshingLists {
+        return
+    }
+
+    if Row < 1 || Row > VisibleShopItems.Length {
+        return
+    }
+
+    VisibleShopItems[Row].selected := Checked ? true : false
+
+    SetTimer(RebuildShopList, -1)
+}
+
+ClearSearch(*) {
+    global SearchEdit
+
+    SearchEdit.Value := ""
+    RebuildShopList()
+}
+
+SetCategorySelection(Category, ShouldSelect) {
+    global Items, IsRunning
+
+    if IsRunning {
+        UpdateStatus("Stop AutoBuy before changing selections.")
+        return
+    }
+
+    for Item in Items {
+        if Item.category = Category {
+            Item.selected := ShouldSelect
+        }
+    }
+
+    RebuildShopList()
+}
+
+RefreshSelectionSummary() {
+    global Items, SelectionLabel
+
+    SelectedCount := 0
+
+    for Item in Items {
+        if Item.selected {
+            SelectedCount += 1
+        }
+    }
+
+    SelectionLabel.Text := (
+        "Selected: "
+        SelectedCount
+        " item"
+        (SelectedCount = 1 ? "" : "s")
+    )
+}
+
+GetSelectedItems() {
+    global Items
+
+    SelectedItems := []
+
+    for Item in Items {
+        if Item.selected {
+            SelectedItems.Push(Item)
+        }
+    }
+
+    return SelectedItems
+}
+
+HasSelectedItems() {
+    return GetSelectedItems().Length > 0
+}
+
+; -----------------------------------------------------------------------------
 
 ; Hotkeys
 ; -----------------------------------------------------------------------------
