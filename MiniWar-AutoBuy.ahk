@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.3.3 Test Build
+; v2.3.4 Fast Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.3.3-test"
+AppVersion := "v2.3.4-fast-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -36,9 +36,7 @@ Settings := {
     purchaseClickDelay: 250,
     purchaseSettleDelay: 350,
 
-    ; Navigation timing.
-    ; These are intentionally faster than the original safe/test timings while
-    ; still leaving Roblox enough time to update menus between inputs.
+    ; Faster navigation timing.
     shopEntryDelay: 300,
     shopOpenDelay: 1200,
     categoryDelay: 175,
@@ -840,127 +838,6 @@ NavigateToPurchaseButton(DownCount) {
 }
 
 PurchaseAvailableStock() {
-        return false
-    }
-
-    return CompletePurchaseReset()
-}
-
-OpenShop() {
-    global Settings
-
-    if !SendToRoblox("\") {
-        return false
-    }
-
-    Loop 3 {
-        if !SendToRoblox("{Left}") {
-            return false
-        }
-    }
-
-    if !SendToRoblox("{Enter}") {
-        return false
-    }
-
-    Sleep(Settings.shopEntryDelay)
-
-    if !SendToRoblox("e") {
-        return false
-    }
-
-    Sleep(Settings.shopOpenDelay)
-
-    return true
-}
-
-OpenCategory(Category) {
-    global Settings
-
-    switch Category {
-        case "Factories":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.navigationDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.navigationDelay)
-            return true
-
-        case "Houses":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-            return true
-
-        case "Military":
-            if !SendToRoblox("{Down}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            if !SendToRoblox("{Right}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-
-            if !SendToRoblox("{Enter}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-            return true
-
-        default:
-            StopImmediately("Unknown category: " Category)
-            return false
-    }
-}
-
-NavigateToPurchaseButton(DownCount) {
-    Loop DownCount {
-        Sleep(100)
-
-        if !SendToRoblox("{Down}") {
-            return false
-        }
-    }
-
-    if !SendToRoblox("{Right}") {
-        return false
-    }
-
-    Sleep(150)
-
-    return true
-}
-
-PurchaseAvailableStock() {
     global Settings, IsStopRequested
 
     Attempts := Settings.buyFullStock ? Settings.maxStockAttempts : 1
@@ -977,8 +854,6 @@ PurchaseAvailableStock() {
         Sleep(Settings.purchaseClickDelay)
     }
 
-    ; Give even a single selected item enough time to register server-side
-    ; before the UI-navigation reset begins.
     Sleep(Settings.purchaseSettleDelay)
 
     return true
@@ -986,8 +861,6 @@ PurchaseAvailableStock() {
 
 CompletePurchaseReset() {
     global Settings
-
-    ; Key order is unchanged from the working build. Only timing is faster.
 
     if !SendToRoblox("{Right}") {
         return false
@@ -1035,7 +908,7 @@ CompletePurchaseReset() {
 
     Sleep(Settings.itemFocusDelay)
 
-    return SendToRoblox("\\")
+    return SendToRoblox("\")
 }
 
 ; -----------------------------------------------------------------------------
