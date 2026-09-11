@@ -3,34 +3,57 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.2
+; v2.3 Test Build
 ;
-; Polished GUI release built on the known-good v2.1 purchase engine.
-; The purchase/navigation logic remains unchanged.
+; Complete shop coverage, larger UI, search/filtering, per-category controls,
+; configurable cycle timing, runtime statistics, Roblox status, settings
+; persistence, full-stock purchase attempts, and single-item purchase timing fix.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; Configuration
+; Application
 ; -----------------------------------------------------------------------------
+
+AppVersion := "v2.3-test"
+ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
     robloxWindow: "ahk_exe RobloxPlayerBeta.exe",
+
+    ; Runtime settings. These are updated from the Settings panel.
     cycleDelay: 20000,
-    betweenItemsDelay: 1000
+    betweenItemsDelay: 1000,
+    autoFocusRoblox: true,
+    rememberSelections: true,
+
+    ; The shop can contain more than one copy of the same item.
+    ; The macro cannot read the visible stock number, so it safely attempts
+    ; the same focused purchase button up to this many times.
+    buyFullStock: true,
+    maxStockAttempts: 5,
+
+    ; Purchase timing.
+    purchaseClickDelay: 400,
+    purchaseSettleDelay: 650
 }
 
-; IMPORTANT:
-; "downCount" is the number of Down presses used by the proven v1 navigation.
+; -----------------------------------------------------------------------------
+; Shop Data
+; -----------------------------------------------------------------------------
 ;
-; Known v1 anchors:
+; "downCount" preserves the working navigation mapping from v2.1/v2.2.
+;
+; Factories and Houses use list index + 1.
+; Military uses the list index directly.
+;
+; Known working anchors:
 ;   Data Center            = 19
 ;   Blackhole Generator    = 20
 ;   Giant Skyscraper       = 12
 ;   Double Turbo Tower     = 13
 ;   Air Base               = 16
 ;   Artillery Depot        = 17
-;
-; The rest of the current shop is mapped from those confirmed positions.
+; -----------------------------------------------------------------------------
 
 Items := [
     ; Factories
@@ -103,6 +126,10 @@ Items := [
     {name: "War Machine Facility",     category: "Military", downCount: 25}
 ]
 
+for Item in Items {
+    Item.selected := false
+}
+
 ; -----------------------------------------------------------------------------
 ; Runtime State
 ; -----------------------------------------------------------------------------
@@ -110,116 +137,362 @@ Items := [
 IsRunning := false
 IsCycleActive := false
 IsStopRequested := false
+IsRefreshingLists := false
+
+CyclesCompleted := 0
+PurchaseAttempts := 0
+RunStartedAt := 0
+LastRunElapsedMs := 0
 
 CategoryLists := Map()
+CategoryVisibleItems := Map()
+
+; -----------------------------------------------------------------------------
+; Load Saved Preferences
+; -----------------------------------------------------------------------------
+
+LoadPreferences()
 
 ; -----------------------------------------------------------------------------
 ; GUI
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.2"
-
-MainGui := Gui("+MinSize680x610")
+MainGui := Gui("+MinSize1040x720")
 MainGui.Title := "MiniWar AutoBuy " AppVersion
 MainGui.MarginX := 20
 MainGui.MarginY := 18
 
-; Header
-MainGui.SetFont("s16 Bold", "Segoe UI")
-MainGui.Add("Text", "xm ym w490 h30", "MiniWar AutoBuy")
+; Header ----------------------------------------------------------------------
+
+MainGui.SetFont("s17 Bold", "Segoe UI")
+MainGui.Add("Text", "xm ym w540 h32", "MiniWar AutoBuy")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-VersionLabel := MainGui.Add("Text", "x+18 yp+5 w110 Right", AppVersion)
+MainGui.Add("Text", "x+10 yp+7 w115 Right", AppVersion)
+
+RobloxStatusLabel := MainGui.Add(
+    "Text",
+    "x700 yp w300 h24 Right",
+    "Roblox: Checking..."
+)
 
 MainGui.SetFont("s10 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
-    "xm y+3 w630",
-    "Choose the shop items you want MiniWar AutoBuy to purchase each cycle."
+    "xm y+4 w650 h22",
+    "Select shop items, configure the cycle, then start AutoBuy."
 )
 
-MainGui.SetFont("s9 Norm", "Segoe UI")
-MainGui.Add(
-    "Text",
-    "xm y+4 w630",
-    "The purchase engine is unchanged from the working v2.1 build."
-)
+; Search ----------------------------------------------------------------------
 
-; Shop selection
+MainGui.SetFont("s9 Bold", "Segoe UI")
+MainGui.Add("Text", "xm y+18 w90 h22", "Search")
+
 MainGui.SetFont("s10 Norm", "Segoe UI")
+SearchEdit := MainGui.Add(
+    "Edit",
+    "x+8 yp-3 w560 h28",
+    ""
+)
+
+ClearSearchButton := MainGui.Add(
+    "Button",
+    "x+8 yp w80 h28",
+    "Clear"
+)
+
+; Shop tabs -------------------------------------------------------------------
+
 ShopTabs := MainGui.Add(
     "Tab3",
-    "xm y+18 w640 h400",
+    "xm y+14 w650 h520",
     ["Factories", "Houses", "Military"]
 )
 
-CreateShopList("Factories")
-CreateShopList("Houses")
-CreateShopList("Military")
+CreateCategoryTab("Factories")
+CreateCategoryTab("Houses")
+CreateCategoryTab("Military")
 
 ShopTabs.UseTab()
 
-; Selection summary + utility buttons
+; Right-side status panel -----------------------------------------------------
+
+MainGui.SetFont("s10 Bold", "Segoe UI")
+MainGui.Add("GroupBox", "x700 y98 w320 h215", "Run Status")
+
 MainGui.SetFont("s9 Norm", "Segoe UI")
-SelectionLabel := MainGui.Add("Text", "xm y+15 w250 h24", "Selected: 0 items")
+StatusLabel := MainGui.Add(
+    "Text",
+    "x720 y127 w280 h24",
+    "Status: Stopped"
+)
 
-SelectAllButton := MainGui.Add("Button", "x+64 yp-4 w110 h32", "Select All")
-ClearAllButton := MainGui.Add("Button", "x+8 yp w110 h32", "Clear All")
+CurrentItemLabel := MainGui.Add(
+    "Text",
+    "x720 y158 w280 h42",
+    "Buying: —"
+)
 
-; Primary action
+ProgressLabel := MainGui.Add(
+    "Text",
+    "x720 y202 w280 h22",
+    "Item: —"
+)
+
+CyclesLabel := MainGui.Add(
+    "Text",
+    "x720 y232 w280 h22",
+    "Cycles completed: 0"
+)
+
+AttemptsLabel := MainGui.Add(
+    "Text",
+    "x720 y258 w280 h22",
+    "Purchase attempts: 0"
+)
+
+RuntimeLabel := MainGui.Add(
+    "Text",
+    "x720 y284 w280 h22",
+    "Session runtime: 0s"
+)
+
+; Settings panel --------------------------------------------------------------
+
+MainGui.SetFont("s10 Bold", "Segoe UI")
+MainGui.Add("GroupBox", "x700 y328 w320 h285", "Settings")
+
+MainGui.SetFont("s9 Norm", "Segoe UI")
+
+MainGui.Add("Text", "x720 y360 w150 h22", "Repeat every")
+CycleDelayEdit := MainGui.Add(
+    "Edit",
+    "x875 y356 w75 h26 Number",
+    Round(Settings.cycleDelay / 1000)
+)
+MainGui.Add("UpDown", "Range5-600", Round(Settings.cycleDelay / 1000))
+MainGui.Add("Text", "x955 y360 w45 h22", "sec")
+
+MainGui.Add("Text", "x720 y397 w150 h22", "Between items")
+BetweenItemsEdit := MainGui.Add(
+    "Edit",
+    "x875 y393 w75 h26 Number",
+    Settings.betweenItemsDelay
+)
+MainGui.Add("UpDown", "Range100-5000", Settings.betweenItemsDelay)
+MainGui.Add("Text", "x955 y397 w45 h22", "ms")
+
+MainGui.Add("Text", "x720 y434 w150 h22", "Max stock attempts")
+MaxStockEdit := MainGui.Add(
+    "Edit",
+    "x875 y430 w75 h26 Number",
+    Settings.maxStockAttempts
+)
+MainGui.Add("UpDown", "Range1-10", Settings.maxStockAttempts)
+
+BuyFullStockCheckbox := MainGui.Add(
+    "Checkbox",
+    "x720 y470 w260 h24",
+    "Buy full available stock"
+)
+BuyFullStockCheckbox.Value := Settings.buyFullStock ? 1 : 0
+
+AutoFocusCheckbox := MainGui.Add(
+    "Checkbox",
+    "x720 y500 w260 h24",
+    "Auto-focus Roblox when starting"
+)
+AutoFocusCheckbox.Value := Settings.autoFocusRoblox ? 1 : 0
+
+RememberSelectionsCheckbox := MainGui.Add(
+    "Checkbox",
+    "x720 y530 w260 h24",
+    "Remember selections and settings"
+)
+RememberSelectionsCheckbox.Value := Settings.rememberSelections ? 1 : 0
+
+MainGui.SetFont("s8 Norm", "Segoe UI")
+MainGui.Add(
+    "Text",
+    "x720 y562 w275 h42",
+    "Cycle range: 5–600 sec   •   Between-item range: 100–5000 ms"
+)
+
+; Bottom controls -------------------------------------------------------------
+
+MainGui.SetFont("s9 Norm", "Segoe UI")
+SelectionLabel := MainGui.Add(
+    "Text",
+    "xm y+12 w250 h24",
+    "Selected: 0 items"
+)
+
 MainGui.SetFont("s10 Bold", "Segoe UI")
 StartStopButton := MainGui.Add(
     "Button",
-    "xm y+14 w640 h38 Default",
+    "x700 y628 w320 h40 Default",
     "Start AutoBuy"
 )
 
-; Status area
-MainGui.SetFont("s10 Bold", "Segoe UI")
-StatusLabel := MainGui.Add("Text", "xm y+14 w640 h23", "Status: Stopped")
-
 MainGui.SetFont("s9 Norm", "Segoe UI")
-HintLabel := MainGui.Add(
+MainGui.Add(
     "Text",
-    "xm y+2 w640 h20",
-    "F1  Start / Stop     •     F2  Exit     •     Start automatically focuses Roblox"
+    "x700 y676 w320 h24 Center",
+    "F1  Start / Stop     •     F2  Exit"
 )
 
-SelectAllButton.OnEvent("Click", SelectAllItems)
-ClearAllButton.OnEvent("Click", ClearAllItems)
+; Events ----------------------------------------------------------------------
+
+SearchEdit.OnEvent("Change", (*) => RebuildShopLists())
+ClearSearchButton.OnEvent("Click", ClearSearch)
 StartStopButton.OnEvent("Click", StartStopButtonClicked)
-MainGui.OnEvent("Close", (*) => ExitApp())
 
-MainGui.Show("w680 h610")
+MainGui.OnEvent("Close", OnGuiClose)
+
+MainGui.Show("w1040 h720")
+
+RebuildShopLists()
 RefreshSelectionSummary()
+UpdateRobloxStatus()
+UpdateStatsDisplay()
 
-CreateShopList(Category) {
-    global MainGui, ShopTabs, Items, CategoryLists
+SetTimer(UpdateRobloxStatus, 1000)
+SetTimer(UpdateRuntimeDisplay, 1000)
+
+; -----------------------------------------------------------------------------
+; GUI Creation
+; -----------------------------------------------------------------------------
+
+CreateCategoryTab(Category) {
+    global MainGui, ShopTabs, CategoryLists, CategoryVisibleItems
 
     ShopTabs.UseTab(Category)
 
+    MainGui.SetFont("s9 Norm", "Segoe UI")
+
+    SelectCategoryButton := MainGui.Add(
+        "Button",
+        "x42 y164 w135 h28",
+        "Select All " Category
+    )
+
+    ClearCategoryButton := MainGui.Add(
+        "Button",
+        "x+8 yp w135 h28",
+        "Clear " Category
+    )
+
+    CategoryCountLabel := MainGui.Add(
+        "Text",
+        "x+18 yp+5 w250 h22 Right",
+        ""
+    )
+
     ShopList := MainGui.Add(
         "ListView",
-        "x40 y142 w600 h330 Checked -Multi Grid",
+        "x42 y202 w605 h395 Checked -Multi",
         ["Shop Item"]
     )
 
-    ShopList.ModifyCol(1, 565)
+    ShopList.ModifyCol(1, 570)
 
-    for Item in Items {
-        if Item.category != Category {
-            continue
-        }
+    SelectCategoryButton.OnEvent(
+        "Click",
+        (*) => SetCategorySelection(Category, true)
+    )
 
-        RowNumber := ShopList.Add("", Item.name)
-        Item.listView := ShopList
-        Item.rowNumber := RowNumber
-    }
+    ClearCategoryButton.OnEvent(
+        "Click",
+        (*) => SetCategorySelection(Category, false)
+    )
 
-    ; Refresh the count immediately after a checkbox changes.
-    ShopList.OnEvent("ItemCheck", (*) => SetTimer(RefreshSelectionSummary, -1))
+    ShopList.OnEvent(
+        "ItemCheck",
+        (Ctrl, Row, Checked) => OnShopItemCheck(Category, Row, Checked)
+    )
 
     CategoryLists[Category] := ShopList
+    CategoryVisibleItems[Category] := []
+}
+
+; -----------------------------------------------------------------------------
+; Search / List Model
+; -----------------------------------------------------------------------------
+
+RebuildShopLists(*) {
+    global Items, CategoryLists, CategoryVisibleItems
+    global SearchEdit, IsRefreshingLists
+
+    SearchText := StrLower(Trim(SearchEdit.Value))
+    IsRefreshingLists := true
+
+    for Category, ShopList in CategoryLists {
+        ShopList.Delete()
+
+        VisibleItems := []
+
+        for Item in Items {
+            if Item.category != Category {
+                continue
+            }
+
+            if SearchText != "" && !InStr(StrLower(Item.name), SearchText) {
+                continue
+            }
+
+            RowOptions := Item.selected ? "Check" : ""
+            ShopList.Add(RowOptions, Item.name)
+            VisibleItems.Push(Item)
+        }
+
+        CategoryVisibleItems[Category] := VisibleItems
+        ShopList.ModifyCol(1, 570)
+    }
+
+    IsRefreshingLists := false
+    RefreshSelectionSummary()
+}
+
+OnShopItemCheck(Category, Row, Checked) {
+    global CategoryVisibleItems, IsRefreshingLists
+
+    if IsRefreshingLists {
+        return
+    }
+
+    VisibleItems := CategoryVisibleItems[Category]
+
+    if Row < 1 || Row > VisibleItems.Length {
+        return
+    }
+
+    VisibleItems[Row].selected := Checked ? true : false
+
+    SetTimer(RefreshSelectionSummary, -1)
+}
+
+ClearSearch(*) {
+    global SearchEdit
+
+    SearchEdit.Value := ""
+    RebuildShopLists()
+}
+
+SetCategorySelection(Category, ShouldSelect) {
+    global Items, IsRunning
+
+    if IsRunning {
+        UpdateStatus("Stop AutoBuy before changing selections.")
+        return
+    }
+
+    for Item in Items {
+        if Item.category = Category {
+            Item.selected := ShouldSelect
+        }
+    }
+
+    RebuildShopLists()
 }
 
 RefreshSelectionSummary() {
@@ -228,12 +501,35 @@ RefreshSelectionSummary() {
     SelectedCount := 0
 
     for Item in Items {
-        if IsItemSelected(Item) {
+        if Item.selected {
             SelectedCount += 1
         }
     }
 
-    SelectionLabel.Text := "Selected: " SelectedCount " item" (SelectedCount = 1 ? "" : "s")
+    SelectionLabel.Text := (
+        "Selected: "
+        SelectedCount
+        " item"
+        (SelectedCount = 1 ? "" : "s")
+    )
+}
+
+GetSelectedItems() {
+    global Items
+
+    SelectedItems := []
+
+    for Item in Items {
+        if Item.selected {
+            SelectedItems.Push(Item)
+        }
+    }
+
+    return SelectedItems
+}
+
+HasSelectedItems() {
+    return GetSelectedItems().Length > 0
 }
 
 ; -----------------------------------------------------------------------------
@@ -241,7 +537,7 @@ RefreshSelectionSummary() {
 ; -----------------------------------------------------------------------------
 
 F1::ToggleAutoBuyFromHotkey()
-F2::ExitApp()
+F2::ExitApplication()
 
 ToggleAutoBuyFromHotkey() {
     global IsRunning
@@ -269,12 +565,15 @@ StartStopButtonClicked(*) {
 ; Controller
 ; -----------------------------------------------------------------------------
 
-StartAutoBuy(ShouldActivateRoblox) {
-    global IsRunning, IsCycleActive, IsStopRequested, Settings
+StartAutoBuy(StartedFromGui) {
+    global IsRunning, IsCycleActive, IsStopRequested, RunStartedAt
+    global Settings
 
     if IsCycleActive {
         return
     }
+
+    ApplySettingsFromGui()
 
     if !HasSelectedItems() {
         UpdateStatus("Select at least one item first.")
@@ -286,16 +585,21 @@ StartAutoBuy(ShouldActivateRoblox) {
         return
     }
 
-    if ShouldActivateRoblox {
-        UpdateStatus("Switching to Roblox...")
-        WinActivate(Settings.robloxWindow)
+    if StartedFromGui {
+        if Settings.autoFocusRoblox {
+            UpdateStatus("Switching to Roblox...")
+            WinActivate(Settings.robloxWindow)
 
-        if !WinWaitActive(Settings.robloxWindow, , 2) {
-            UpdateStatus("Could not focus Roblox.")
+            if !WinWaitActive(Settings.robloxWindow, , 2) {
+                UpdateStatus("Could not focus Roblox.")
+                return
+            }
+
+            Sleep(300)
+        } else {
+            UpdateStatus("Auto-focus is off. Press F1 while Roblox is focused.")
             return
         }
-
-        Sleep(250)
     } else if !WinActive(Settings.robloxWindow) {
         UpdateStatus("Press F1 while Roblox is focused.")
         return
@@ -303,11 +607,13 @@ StartAutoBuy(ShouldActivateRoblox) {
 
     IsRunning := true
     IsStopRequested := false
+    RunStartedAt := A_TickCount
 
+    SavePreferences()
     UpdateStartStopButton()
     UpdateStatus("Running")
+    UpdateCurrentProgress("Preparing...", "Starting cycle")
 
-    ; Run outside the initiating hotkey/click thread.
     SetTimer(RunPurchaseCycle, -1)
 }
 
@@ -327,6 +633,7 @@ RequestStop() {
 
     UpdateStartStopButton()
     UpdateStatus("Stopped")
+    UpdateCurrentProgress("—", "—")
 }
 
 StopImmediately(Message) {
@@ -339,30 +646,40 @@ StopImmediately(Message) {
 
     UpdateStartStopButton()
     UpdateStatus(Message)
+    UpdateCurrentProgress("—", "—")
 }
 
 RunPurchaseCycle() {
-    global Items, Settings
+    global Settings
     global IsRunning, IsCycleActive, IsStopRequested
+    global CyclesCompleted, PurchaseAttempts
 
     if !IsRunning || IsCycleActive {
         return
     }
 
-    IsCycleActive := true
-    PurchasedAnything := false
+    SelectedItems := GetSelectedItems()
 
-    for Item in Items {
+    if SelectedItems.Length = 0 {
+        StopImmediately("No items are selected.")
+        return
+    }
+
+    IsCycleActive := true
+
+    for Index, Item in SelectedItems {
         if !IsRunning || IsStopRequested {
             break
         }
 
-        if !IsItemSelected(Item) {
-            continue
-        }
-
-        PurchasedAnything := true
         UpdateStatus("Buying " Item.name "...")
+        UpdateCurrentProgress(
+            Item.name,
+            "Item " Index " of " SelectedItems.Length
+        )
+
+        PurchaseAttempts += 1
+        UpdateStatsDisplay()
 
         if !PurchaseItem(Item) {
             break
@@ -380,8 +697,10 @@ RunPurchaseCycle() {
     if IsStopRequested {
         IsRunning := false
         IsStopRequested := false
+
         UpdateStartStopButton()
         UpdateStatus("Stopped")
+        UpdateCurrentProgress("—", "—")
         return
     }
 
@@ -389,22 +708,35 @@ RunPurchaseCycle() {
         return
     }
 
-    if !PurchasedAnything {
-        StopImmediately("No items are selected.")
-        return
-    }
+    CyclesCompleted += 1
+    UpdateStatsDisplay()
 
     UpdateStatus(
-        "Running - next cycle in "
+        "Waiting "
         Round(Settings.cycleDelay / 1000)
-        "s"
+        " seconds for the next cycle"
     )
+
+    UpdateCurrentProgress("—", "Cycle complete")
 
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
 }
 
 ; -----------------------------------------------------------------------------
-; Known-Good v1 Purchase Sequence
+; Purchase Engine
+; -----------------------------------------------------------------------------
+;
+; Shop opening, category movement, item down-count navigation, and reset
+; navigation retain the proven v2.1 sequence.
+;
+; The purchase-button step is the only intentional behavioral change:
+;   1. Stay focused on the cash purchase button.
+;   2. Press Enter repeatedly when full-stock mode is enabled.
+;   3. Wait longer for the purchase to register.
+;
+; This fixes:
+;   - only buying one unit from a multi-stock listing;
+;   - single-selected-item runs moving correctly but failing to register a buy.
 ; -----------------------------------------------------------------------------
 
 PurchaseItem(Item) {
@@ -416,11 +748,15 @@ PurchaseItem(Item) {
         return false
     }
 
-    if !NavigateToItem(Item.downCount) {
+    if !NavigateToPurchaseButton(Item.downCount) {
         return false
     }
 
-    return CompletePurchase()
+    if !PurchaseAvailableStock() {
+        return false
+    }
+
+    return CompletePurchaseReset()
 }
 
 OpenShop() {
@@ -515,7 +851,7 @@ OpenCategory(Category) {
     }
 }
 
-NavigateToItem(DownCount) {
+NavigateToPurchaseButton(DownCount) {
     Loop DownCount {
         Sleep(100)
 
@@ -528,18 +864,38 @@ NavigateToItem(DownCount) {
         return false
     }
 
-    Sleep(100)
-
-    if !SendToRoblox("{Enter}") {
-        return false
-    }
-
-    Sleep(100)
+    Sleep(150)
 
     return true
 }
 
-CompletePurchase() {
+PurchaseAvailableStock() {
+    global Settings, IsStopRequested
+
+    Attempts := Settings.buyFullStock ? Settings.maxStockAttempts : 1
+
+    Loop Attempts {
+        if IsStopRequested {
+            return true
+        }
+
+        if !SendToRoblox("{Enter}") {
+            return false
+        }
+
+        Sleep(Settings.purchaseClickDelay)
+    }
+
+    ; Give even a single selected item enough time to register server-side
+    ; before the UI-navigation reset begins.
+    Sleep(Settings.purchaseSettleDelay)
+
+    return true
+}
+
+CompletePurchaseReset() {
+    ; This reset sequence is preserved from the working v2.1 build.
+
     if !SendToRoblox("{Right}") {
         return false
     }
@@ -584,7 +940,7 @@ CompletePurchase() {
         return false
     }
 
-    Sleep(100)
+    Sleep(150)
 
     return SendToRoblox("\")
 }
@@ -610,57 +966,229 @@ SendToRoblox(Keys) {
 }
 
 ; -----------------------------------------------------------------------------
-; Selection Helpers
+; Settings
 ; -----------------------------------------------------------------------------
 
-IsItemSelected(Item) {
-    return Item.listView.GetNext(Item.rowNumber - 1, "C") = Item.rowNumber
+ApplySettingsFromGui() {
+    global Settings
+    global CycleDelayEdit, BetweenItemsEdit, MaxStockEdit
+    global AutoFocusCheckbox, RememberSelectionsCheckbox
+    global BuyFullStockCheckbox
+
+    CycleSeconds := CycleDelayEdit.Value + 0
+    BetweenMs := BetweenItemsEdit.Value + 0
+    MaxAttempts := MaxStockEdit.Value + 0
+
+    CycleSeconds := Max(5, Min(600, CycleSeconds))
+    BetweenMs := Max(100, Min(5000, BetweenMs))
+    MaxAttempts := Max(1, Min(10, MaxAttempts))
+
+    CycleDelayEdit.Value := CycleSeconds
+    BetweenItemsEdit.Value := BetweenMs
+    MaxStockEdit.Value := MaxAttempts
+
+    Settings.cycleDelay := CycleSeconds * 1000
+    Settings.betweenItemsDelay := BetweenMs
+    Settings.maxStockAttempts := MaxAttempts
+
+    Settings.buyFullStock := BuyFullStockCheckbox.Value = 1
+    Settings.autoFocusRoblox := AutoFocusCheckbox.Value = 1
+    Settings.rememberSelections := RememberSelectionsCheckbox.Value = 1
 }
 
-HasSelectedItems() {
-    global Items
+LoadPreferences() {
+    global ConfigFile, Settings, Items
 
-    for Item in Items {
-        if IsItemSelected(Item) {
-            return true
-        }
-    }
-
-    return false
-}
-
-SelectAllItems(*) {
-    global CategoryLists
-
-    for Category, ShopList in CategoryLists {
-        Loop ShopList.GetCount() {
-            ShopList.Modify(A_Index, "Check")
-        }
-    }
-
-    RefreshSelectionSummary()
-}
-
-ClearAllItems(*) {
-    global CategoryLists, IsRunning
-
-    if IsRunning {
-        UpdateStatus("Stop AutoBuy before clearing selections.")
+    if !FileExist(ConfigFile) {
         return
     }
 
-    for Category, ShopList in CategoryLists {
-        Loop ShopList.GetCount() {
-            ShopList.Modify(A_Index, "-Check")
-        }
+    try Settings.cycleDelay := Max(
+        5000,
+        Min(
+            600000,
+            (IniRead(ConfigFile, "Settings", "CycleSeconds", "20") + 0) * 1000
+        )
+    )
+
+    try Settings.betweenItemsDelay := Max(
+        100,
+        Min(
+            5000,
+            IniRead(ConfigFile, "Settings", "BetweenItemsMs", "1000") + 0
+        )
+    )
+
+    try Settings.maxStockAttempts := Max(
+        1,
+        Min(
+            10,
+            IniRead(ConfigFile, "Settings", "MaxStockAttempts", "5") + 0
+        )
+    )
+
+    try Settings.buyFullStock := (
+        IniRead(ConfigFile, "Settings", "BuyFullStock", "1") + 0
+    ) = 1
+
+    try Settings.autoFocusRoblox := (
+        IniRead(ConfigFile, "Settings", "AutoFocusRoblox", "1") + 0
+    ) = 1
+
+    try Settings.rememberSelections := (
+        IniRead(ConfigFile, "Settings", "RememberSelections", "1") + 0
+    ) = 1
+
+    if !Settings.rememberSelections {
+        return
     }
 
-    RefreshSelectionSummary()
+    for Item in Items {
+        SafeKey := MakeIniKey(Item.category "|" Item.name)
+
+        try Item.selected := (
+            IniRead(ConfigFile, "Selections", SafeKey, "0") + 0
+        ) = 1
+    }
+}
+
+SavePreferences() {
+    global ConfigFile, Settings, Items
+
+    ; Controls do not exist during early startup, so callers apply GUI settings
+    ; before invoking this function while the application is running.
+
+    try IniWrite(
+        Round(Settings.cycleDelay / 1000),
+        ConfigFile,
+        "Settings",
+        "CycleSeconds"
+    )
+
+    try IniWrite(
+        Settings.betweenItemsDelay,
+        ConfigFile,
+        "Settings",
+        "BetweenItemsMs"
+    )
+
+    try IniWrite(
+        Settings.maxStockAttempts,
+        ConfigFile,
+        "Settings",
+        "MaxStockAttempts"
+    )
+
+    try IniWrite(
+        Settings.buyFullStock ? 1 : 0,
+        ConfigFile,
+        "Settings",
+        "BuyFullStock"
+    )
+
+    try IniWrite(
+        Settings.autoFocusRoblox ? 1 : 0,
+        ConfigFile,
+        "Settings",
+        "AutoFocusRoblox"
+    )
+
+    try IniWrite(
+        Settings.rememberSelections ? 1 : 0,
+        ConfigFile,
+        "Settings",
+        "RememberSelections"
+    )
+
+    if Settings.rememberSelections {
+        for Item in Items {
+            SafeKey := MakeIniKey(Item.category "|" Item.name)
+
+            try IniWrite(
+                Item.selected ? 1 : 0,
+                ConfigFile,
+                "Selections",
+                SafeKey
+            )
+        }
+    } else {
+        try IniDelete(ConfigFile, "Selections")
+    }
+}
+
+MakeIniKey(Value) {
+    Key := StrReplace(Value, " ", "_")
+    Key := StrReplace(Key, "|", "__")
+    Key := StrReplace(Key, "'", "")
+    return Key
 }
 
 ; -----------------------------------------------------------------------------
-; Status Helpers
+; Status / Statistics
 ; -----------------------------------------------------------------------------
+
+UpdateRobloxStatus(*) {
+    global Settings, RobloxStatusLabel
+
+    if WinExist(Settings.robloxWindow) {
+        RobloxStatusLabel.Text := "Roblox: Connected"
+    } else {
+        RobloxStatusLabel.Text := "Roblox: Not detected"
+    }
+}
+
+UpdateStatus(Message) {
+    global StatusLabel
+    StatusLabel.Text := "Status: " Message
+}
+
+UpdateCurrentProgress(ItemName, ProgressText) {
+    global CurrentItemLabel, ProgressLabel
+
+    CurrentItemLabel.Text := "Buying: " ItemName
+    ProgressLabel.Text := "Item: " ProgressText
+}
+
+UpdateStatsDisplay() {
+    global CyclesCompleted, PurchaseAttempts
+    global CyclesLabel, AttemptsLabel
+
+    CyclesLabel.Text := "Cycles completed: " CyclesCompleted
+    AttemptsLabel.Text := "Purchase attempts: " PurchaseAttempts
+}
+
+UpdateRuntimeDisplay(*) {
+    global IsRunning, RunStartedAt, LastRunElapsedMs, RuntimeLabel
+
+    if IsRunning && RunStartedAt > 0 {
+        ElapsedMs := A_TickCount - RunStartedAt
+        LastRunElapsedMs := ElapsedMs
+    } else {
+        ElapsedMs := LastRunElapsedMs
+    }
+
+    RuntimeLabel.Text := "Session runtime: " FormatDuration(ElapsedMs)
+}
+
+FormatDuration(Milliseconds) {
+    TotalSeconds := Floor(Milliseconds / 1000)
+
+    if TotalSeconds < 60 {
+        return TotalSeconds "s"
+    }
+
+    Minutes := Floor(TotalSeconds / 60)
+    Seconds := Mod(TotalSeconds, 60)
+
+    if Minutes < 60 {
+        return Minutes "m " Seconds "s"
+    }
+
+    Hours := Floor(Minutes / 60)
+    Minutes := Mod(Minutes, 60)
+
+    return Hours "h " Minutes "m"
+}
 
 UpdateStartStopButton() {
     global IsRunning, StartStopButton
@@ -668,7 +1196,16 @@ UpdateStartStopButton() {
     StartStopButton.Text := IsRunning ? "Stop AutoBuy" : "Start AutoBuy"
 }
 
-UpdateStatus(Message) {
-    global StatusLabel
-    StatusLabel.Text := "Status: " Message
+; -----------------------------------------------------------------------------
+; Shutdown
+; -----------------------------------------------------------------------------
+
+OnGuiClose(*) {
+    ExitApplication()
+}
+
+ExitApplication() {
+    ApplySettingsFromGui()
+    SavePreferences()
+    ExitApp()
 }
