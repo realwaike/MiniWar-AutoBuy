@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.3 Test Build
+; v2.3.1 Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.3-test"
+AppVersion := "v2.3.1-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -30,7 +30,7 @@ Settings := {
     ; The macro cannot read the visible stock number, so it safely attempts
     ; the same focused purchase button up to this many times.
     buyFullStock: true,
-    maxStockAttempts: 5,
+    maxStockAttempts: 8,
 
     ; Purchase timing.
     purchaseClickDelay: 400,
@@ -157,199 +157,141 @@ LoadPreferences()
 ; GUI
 ; -----------------------------------------------------------------------------
 
-MainGui := Gui("+MinSize1040x720")
+MainGui := Gui("+MinSize1180x780")
 MainGui.Title := "MiniWar AutoBuy " AppVersion
-MainGui.MarginX := 20
+MainGui.MarginX := 22
 MainGui.MarginY := 18
 
 ; Header ----------------------------------------------------------------------
 
-MainGui.SetFont("s17 Bold", "Segoe UI")
-MainGui.Add("Text", "xm ym w540 h32", "MiniWar AutoBuy")
+MainGui.SetFont("s18 Bold", "Segoe UI")
+MainGui.Add("Text", "xm ym w560 h34", "MiniWar AutoBuy")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-MainGui.Add("Text", "x+10 yp+7 w115 Right", AppVersion)
+MainGui.Add("Text", "x+8 yp+9 w120 h22", AppVersion)
 
 RobloxStatusLabel := MainGui.Add(
     "Text",
-    "x700 yp w300 h24 Right",
+    "x840 yp w300 h24 Right",
     "Roblox: Checking..."
 )
 
 MainGui.SetFont("s10 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
-    "xm y+4 w650 h22",
-    "Select shop items, configure the cycle, then start AutoBuy."
+    "xm y+2 w760 h24",
+    "Choose shop items on the left. Runtime controls and settings stay on the right."
 )
 
-; Search ----------------------------------------------------------------------
+MainGui.Add("Text", "xm y+12 w1135 h1 0x10")
+
+; Left panel: shop ------------------------------------------------------------
+
+MainGui.SetFont("s10 Bold", "Segoe UI")
+MainGui.Add("GroupBox", "xm y+14 w770 h625", "Shop Items")
 
 MainGui.SetFont("s9 Bold", "Segoe UI")
-MainGui.Add("Text", "xm y+18 w90 h22", "Search")
+MainGui.Add("Text", "x42 y129 w70 h22", "Search")
 
 MainGui.SetFont("s10 Norm", "Segoe UI")
 SearchEdit := MainGui.Add(
     "Edit",
-    "x+8 yp-3 w560 h28",
+    "x115 y124 w555 h30",
     ""
 )
 
 ClearSearchButton := MainGui.Add(
     "Button",
-    "x+8 yp w80 h28",
+    "x680 y124 w82 h30",
     "Clear"
 )
 
-; Shop tabs -------------------------------------------------------------------
-
 ShopTabs := MainGui.Add(
     "Tab3",
-    "xm y+14 w650 h520",
+    "x42 y166 w720 h520",
     ["Factories", "Houses", "Military"]
 )
 
 CreateCategoryTab("Factories")
 CreateCategoryTab("Houses")
 CreateCategoryTab("Military")
-
 ShopTabs.UseTab()
 
-; Right-side status panel -----------------------------------------------------
+SelectionLabel := MainGui.Add(
+    "Text",
+    "x42 y699 w300 h24",
+    "Selected: 0 items"
+)
+
+; Right panel: run status -----------------------------------------------------
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
-MainGui.Add("GroupBox", "x700 y98 w320 h215", "Run Status")
+MainGui.Add("GroupBox", "x815 y91 w340 h250", "Run Status")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-StatusLabel := MainGui.Add(
-    "Text",
-    "x720 y127 w280 h24",
-    "Status: Stopped"
-)
+StatusLabel := MainGui.Add("Text", "x835 y123 w300 h36", "Status: Stopped")
+CurrentItemLabel := MainGui.Add("Text", "x835 y167 w300 h42", "Buying: —")
+ProgressLabel := MainGui.Add("Text", "x835 y214 w300 h24", "Item: —")
+CyclesLabel := MainGui.Add("Text", "x835 y248 w300 h24", "Cycles completed: 0")
+AttemptsLabel := MainGui.Add("Text", "x835 y278 w300 h24", "Purchase attempts: 0")
+RuntimeLabel := MainGui.Add("Text", "x835 y308 w300 h24", "Session runtime: 0s")
 
-CurrentItemLabel := MainGui.Add(
-    "Text",
-    "x720 y158 w280 h42",
-    "Buying: —"
-)
-
-ProgressLabel := MainGui.Add(
-    "Text",
-    "x720 y202 w280 h22",
-    "Item: —"
-)
-
-CyclesLabel := MainGui.Add(
-    "Text",
-    "x720 y232 w280 h22",
-    "Cycles completed: 0"
-)
-
-AttemptsLabel := MainGui.Add(
-    "Text",
-    "x720 y258 w280 h22",
-    "Purchase attempts: 0"
-)
-
-RuntimeLabel := MainGui.Add(
-    "Text",
-    "x720 y284 w280 h22",
-    "Session runtime: 0s"
-)
-
-; Settings panel --------------------------------------------------------------
+; Right panel: settings -------------------------------------------------------
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
-MainGui.Add("GroupBox", "x700 y328 w320 h285", "Settings")
+MainGui.Add("GroupBox", "x815 y356 w340 h300", "Settings")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-
-MainGui.Add("Text", "x720 y360 w150 h22", "Repeat every")
-CycleDelayEdit := MainGui.Add(
-    "Edit",
-    "x875 y356 w75 h26 Number",
-    Round(Settings.cycleDelay / 1000)
-)
+MainGui.Add("Text", "x835 y391 w145 h24", "Repeat every")
+CycleDelayEdit := MainGui.Add("Edit", "x985 y386 w82 h28 Number", Round(Settings.cycleDelay / 1000))
 MainGui.Add("UpDown", "Range5-600", Round(Settings.cycleDelay / 1000))
-MainGui.Add("Text", "x955 y360 w45 h22", "sec")
+MainGui.Add("Text", "x1075 y391 w45 h24", "sec")
 
-MainGui.Add("Text", "x720 y397 w150 h22", "Between items")
-BetweenItemsEdit := MainGui.Add(
-    "Edit",
-    "x875 y393 w75 h26 Number",
-    Settings.betweenItemsDelay
-)
+MainGui.Add("Text", "x835 y430 w145 h24", "Between items")
+BetweenItemsEdit := MainGui.Add("Edit", "x985 y425 w82 h28 Number", Settings.betweenItemsDelay)
 MainGui.Add("UpDown", "Range100-5000", Settings.betweenItemsDelay)
-MainGui.Add("Text", "x955 y397 w45 h22", "ms")
+MainGui.Add("Text", "x1075 y430 w45 h24", "ms")
 
-MainGui.Add("Text", "x720 y434 w150 h22", "Max stock attempts")
-MaxStockEdit := MainGui.Add(
-    "Edit",
-    "x875 y430 w75 h26 Number",
-    Settings.maxStockAttempts
-)
-MainGui.Add("UpDown", "Range1-10", Settings.maxStockAttempts)
+MainGui.Add("Text", "x835 y469 w145 h24", "Max stock attempts")
+MaxStockEdit := MainGui.Add("Edit", "x985 y464 w82 h28 Number", Settings.maxStockAttempts)
+MainGui.Add("UpDown", "Range1-12", Settings.maxStockAttempts)
 
-BuyFullStockCheckbox := MainGui.Add(
-    "Checkbox",
-    "x720 y470 w260 h24",
-    "Buy full available stock"
-)
+BuyFullStockCheckbox := MainGui.Add("Checkbox", "x835 y506 w285 h24", "Buy full available stock")
 BuyFullStockCheckbox.Value := Settings.buyFullStock ? 1 : 0
 
-AutoFocusCheckbox := MainGui.Add(
-    "Checkbox",
-    "x720 y500 w260 h24",
-    "Auto-focus Roblox when starting"
-)
+AutoFocusCheckbox := MainGui.Add("Checkbox", "x835 y539 w285 h24", "Auto-focus Roblox when starting")
 AutoFocusCheckbox.Value := Settings.autoFocusRoblox ? 1 : 0
 
-RememberSelectionsCheckbox := MainGui.Add(
-    "Checkbox",
-    "x720 y530 w260 h24",
-    "Remember selections and settings"
-)
+RememberSelectionsCheckbox := MainGui.Add("Checkbox", "x835 y572 w285 h24", "Remember selections and settings")
 RememberSelectionsCheckbox.Value := Settings.rememberSelections ? 1 : 0
 
 MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
-    "x720 y562 w275 h42",
-    "Cycle range: 5–600 sec   •   Between-item range: 100–5000 ms"
+    "x835 y607 w285 h38",
+    "Repeat: 5–600 sec   •   Between items: 100–5000 ms"
 )
 
-; Bottom controls -------------------------------------------------------------
-
-MainGui.SetFont("s9 Norm", "Segoe UI")
-SelectionLabel := MainGui.Add(
-    "Text",
-    "xm y+12 w250 h24",
-    "Selected: 0 items"
-)
+; Primary action --------------------------------------------------------------
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
 StartStopButton := MainGui.Add(
     "Button",
-    "x700 y628 w320 h40 Default",
+    "x815 y674 w340 h44 Default",
     "Start AutoBuy"
 )
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-MainGui.Add(
-    "Text",
-    "x700 y676 w320 h24 Center",
-    "F1  Start / Stop     •     F2  Exit"
-)
+MainGui.Add("Text", "x815 y730 w340 h24 Center", "F1  Start / Stop     •     F2  Exit")
 
 ; Events ----------------------------------------------------------------------
 
 SearchEdit.OnEvent("Change", (*) => RebuildShopLists())
 ClearSearchButton.OnEvent("Click", ClearSearch)
 StartStopButton.OnEvent("Click", StartStopButtonClicked)
-
 MainGui.OnEvent("Close", OnGuiClose)
 
-MainGui.Show("w1040 h720")
+MainGui.Show("w1180 h780")
 
 RebuildShopLists()
 RefreshSelectionSummary()
@@ -372,29 +314,23 @@ CreateCategoryTab(Category) {
 
     SelectCategoryButton := MainGui.Add(
         "Button",
-        "x42 y164 w135 h28",
+        "x58 y208 w150 h30",
         "Select All " Category
     )
 
     ClearCategoryButton := MainGui.Add(
         "Button",
-        "x+8 yp w135 h28",
+        "x+10 yp w150 h30",
         "Clear " Category
-    )
-
-    CategoryCountLabel := MainGui.Add(
-        "Text",
-        "x+18 yp+5 w250 h22 Right",
-        ""
     )
 
     ShopList := MainGui.Add(
         "ListView",
-        "x42 y202 w605 h395 Checked -Multi",
+        "x58 y250 w685 h410 Checked -Multi",
         ["Shop Item"]
     )
 
-    ShopList.ModifyCol(1, 570)
+    ShopList.ModifyCol(1, 650)
 
     SelectCategoryButton.OnEvent(
         "Click",
@@ -446,7 +382,7 @@ RebuildShopLists(*) {
         }
 
         CategoryVisibleItems[Category] := VisibleItems
-        ShopList.ModifyCol(1, 570)
+        ShopList.ModifyCol(1, 650)
     }
 
     IsRefreshingLists := false
@@ -975,22 +911,19 @@ ApplySettingsFromGui() {
     global AutoFocusCheckbox, RememberSelectionsCheckbox
     global BuyFullStockCheckbox
 
-    CycleSeconds := CycleDelayEdit.Value + 0
-    BetweenMs := BetweenItemsEdit.Value + 0
-    MaxAttempts := MaxStockEdit.Value + 0
+    ; Read and clamp each field directly. Keeping each value independent avoids
+    ; stale/unassigned temporary variables during GUI shutdown or reload.
+    CycleSecondsValue := Max(5, Min(600, CycleDelayEdit.Value + 0))
+    BetweenItemsValue := Max(100, Min(5000, BetweenItemsEdit.Value + 0))
+    MaxStockValue := Max(1, Min(12, MaxStockEdit.Value + 0))
 
-    CycleSeconds := Max(5, Min(600, CycleSeconds))
-    BetweenMs := Max(100, Min(5000, BetweenMs))
-    MaxAttempts := Max(1, Min(10, MaxAttempts))
+    CycleDelayEdit.Value := CycleSecondsValue
+    BetweenItemsEdit.Value := BetweenItemsValue
+    MaxStockEdit.Value := MaxStockValue
 
-    CycleDelayEdit.Value := CycleSeconds
-    BetweenItemsEdit.Value := BetweenMs
-    MaxStockEdit.Value := MaxAttempts
-
-    Settings.cycleDelay := CycleSeconds * 1000
-    Settings.betweenItemsDelay := BetweenMs
-    Settings.maxStockAttempts := MaxAttempts
-
+    Settings.cycleDelay := CycleSecondsValue * 1000
+    Settings.betweenItemsDelay := BetweenItemsValue
+    Settings.maxStockAttempts := MaxStockValue
     Settings.buyFullStock := BuyFullStockCheckbox.Value = 1
     Settings.autoFocusRoblox := AutoFocusCheckbox.Value = 1
     Settings.rememberSelections := RememberSelectionsCheckbox.Value = 1
@@ -1022,10 +955,15 @@ LoadPreferences() {
     try Settings.maxStockAttempts := Max(
         1,
         Min(
-            10,
-            IniRead(ConfigFile, "Settings", "MaxStockAttempts", "5") + 0
+            12,
+            IniRead(ConfigFile, "Settings", "MaxStockAttempts", "8") + 0
         )
     )
+
+    ; Migrate the previous v2.3-test default of 5 to the new default of 8.
+    if Settings.maxStockAttempts = 5 {
+        Settings.maxStockAttempts := 8
+    }
 
     try Settings.buyFullStock := (
         IniRead(ConfigFile, "Settings", "BuyFullStock", "1") + 0
