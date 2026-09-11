@@ -1,9 +1,13 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 
+; Use one coordinate system everywhere for mouse clicks and pixel checks.
+CoordMode("Mouse", "Screen")
+CoordMode("Pixel", "Screen")
+
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.5.6 Military Sync Test Build
+; v2.6.0 Mouse Anchor Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +18,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.5.6-military-sync-test"
+AppVersion := "v2.6.0-anchor-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -25,6 +29,7 @@ Settings := {
     betweenItemsDelay: 150,
     autoFocusRoblox: true,
     rememberSelections: true,
+    repeatMode: "Fixed Interval",
 
     ; The shop can contain more than one copy of the same item.
     ; The macro cannot read the visible stock number, so it safely attempts
@@ -52,7 +57,11 @@ Settings := {
 
     ; Military tab needs a little more time than Factory/Houses to settle.
     militaryTabMoveDelay: 500,
-    militaryTabEnterDelay: 350
+    militaryTabEnterDelay: 350,
+
+    ; Mouse-anchored category navigation.
+    categoryClickDelay: 180,
+    itemAnchorDelay: 160
 }
 
 ; -----------------------------------------------------------------------------
@@ -161,6 +170,7 @@ IsRefreshingLists := false
 ; Track the category we last selected so the next reopen can navigate relative
 ; to the category Roblox is actually showing.
 CurrentShopCategory := ""
+CurrentCategoryFirstDownCount := 1
 
 CyclesCompleted := 0
 PurchaseAttempts := 0
@@ -180,159 +190,226 @@ LoadPreferences()
 ; GUI
 ; -----------------------------------------------------------------------------
 
-MainGui := Gui("+MinSize1180x780")
+MainGui := Gui("+MinSize1120x760")
 MainGui.Title := "MiniWar AutoBuy " AppVersion
-MainGui.MarginX := 22
+MainGui.MarginX := 20
 MainGui.MarginY := 18
 
-; Header ----------------------------------------------------------------------
-
-MainGui.SetFont("s18 Bold", "Segoe UI")
-MainGui.Add("Text", "xm ym w560 h34", "MiniWar AutoBuy")
+MainGui.SetFont("s17 Bold", "Segoe UI")
+MainGui.Add("Text", "xm ym w500 h32", "MiniWar AutoBuy")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-MainGui.Add("Text", "x+8 yp+9 w120 h22", AppVersion)
-
+VersionLabel := MainGui.Add("Text", "x+10 yp+7 w145", AppVersion)
 RobloxStatusLabel := MainGui.Add(
     "Text",
-    "x840 yp w300 h24 Right",
+    "x820 yp w250 Right",
     "Roblox: Checking..."
 )
 
 MainGui.SetFont("s10 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
-    "xm y+2 w760 h24",
-    "Choose shop items on the left. Runtime controls and settings stay on the right."
+    "xm y+4 w820 h22",
+    "Fast bulk purchasing for the Mini War rotating shop."
 )
 
-MainGui.Add("Text", "xm y+12 w1135 h1 0x10")
+MainTabs := MainGui.Add(
+    "Tab3",
+    "xm y+16 w1080 h620",
+    ["Shop", "Settings"]
+)
 
-; Left panel: shop ------------------------------------------------------------
+; SHOP TAB --------------------------------------------------------------------
+
+MainTabs.UseTab("Shop")
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
-MainGui.Add("GroupBox", "xm y+14 w770 h625", "Shop Items")
+MainGui.Add("GroupBox", "x40 y150 w690 h545", "Shop Selection")
 
 MainGui.SetFont("s9 Bold", "Segoe UI")
-MainGui.Add("Text", "x42 y129 w70 h22", "Search")
-
+MainGui.Add("Text", "x60 y180 w70", "Search")
 MainGui.SetFont("s10 Norm", "Segoe UI")
-SearchEdit := MainGui.Add(
-    "Edit",
-    "x115 y124 w555 h30",
-    ""
-)
-
-ClearSearchButton := MainGui.Add(
-    "Button",
-    "x680 y124 w82 h30",
-    "Clear"
-)
+SearchEdit := MainGui.Add("Edit", "x130 y175 w450 h28")
+ClearSearchButton := MainGui.Add("Button", "x590 y175 w95 h28", "Clear")
 
 MainGui.SetFont("s9 Bold", "Segoe UI")
-MainGui.Add("Text", "x42 y174 w70 h22", "Section")
-
+MainGui.Add("Text", "x60 y220 w70", "Section")
 MainGui.SetFont("s10 Norm", "Segoe UI")
 CategoryDropdown := MainGui.Add(
     "DropDownList",
-    "x115 y168 w225 Choose1",
+    "x130 y214 w200 Choose1",
     ["Factories", "Houses", "Military"]
 )
 
 SelectCategoryButton := MainGui.Add(
     "Button",
-    "x355 y168 w165 h30",
+    "x350 y214 w150 h28",
     "Select All Factories"
 )
 
 ClearCategoryButton := MainGui.Add(
     "Button",
-    "x530 y168 w165 h30",
+    "x510 y214 w150 h28",
     "Clear Factories"
 )
 
 CategorySummaryLabel := MainGui.Add(
     "Text",
-    "x42 y210 w700 h22",
+    "x60 y255 w625 h22",
     "Factories"
 )
 
 ShopList := MainGui.Add(
     "ListView",
-    "x42 y238 w720 h445 Checked -Multi",
+    "x60 y282 w640 h365 Checked -Multi",
     ["Shop Item"]
 )
-
-ShopList.ModifyCol(1, 680)
+ShopList.ModifyCol(1, 600)
 
 SelectionLabel := MainGui.Add(
     "Text",
-    "x42 y699 w500 h24",
+    "x60 y660 w300 h24",
     "Selected: 0 items"
 )
 
-; Right panel: run status -----------------------------------------------------
-
 MainGui.SetFont("s10 Bold", "Segoe UI")
-MainGui.Add("GroupBox", "x815 y91 w340 h250", "Run Status")
+MainGui.Add("GroupBox", "x755 y150 w325 h315", "Run Status")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-StatusLabel := MainGui.Add("Text", "x835 y123 w300 h36", "Status: Stopped")
-CurrentItemLabel := MainGui.Add("Text", "x835 y167 w300 h42", "Buying: —")
-ProgressLabel := MainGui.Add("Text", "x835 y214 w300 h24", "Item: —")
-CyclesLabel := MainGui.Add("Text", "x835 y248 w300 h24", "Cycles completed: 0")
-AttemptsLabel := MainGui.Add("Text", "x835 y278 w300 h24", "Purchase attempts: 0")
-RuntimeLabel := MainGui.Add("Text", "x835 y308 w300 h24", "Session runtime: 0s")
+StatusLabel := MainGui.Add("Text", "x775 y180 w285 h24", "Status: Stopped")
+CurrentItemLabel := MainGui.Add("Text", "x775 y215 w285 h42", "Buying: —")
+ProgressLabel := MainGui.Add("Text", "x775 y260 w285 h22", "Item: —")
+CyclesLabel := MainGui.Add("Text", "x775 y300 w285 h22", "Cycles completed: 0")
+AttemptsLabel := MainGui.Add("Text", "x775 y330 w285 h22", "Purchase attempts: 0")
+RuntimeLabel := MainGui.Add("Text", "x775 y360 w285 h22", "Session runtime: 0s")
+RepeatStatusLabel := MainGui.Add("Text", "x775 y400 w285 h42", "Repeat: Fixed interval")
 
-; Right panel: settings -------------------------------------------------------
+StartStopButton := MainGui.Add(
+    "Button",
+    "x755 y485 w325 h42 Default",
+    "Start AutoBuy"
+)
+
+MainGui.Add(
+    "Text",
+    "x755 y540 w325 h24 Center",
+    "F1  Start / Stop     •     F2  Exit"
+)
+
+MainGui.Add(
+    "Text",
+    "x755 y585 w325 h60",
+    "Bulk mode keeps purchases fast while the shop guard stops the macro if the shop disappears."
+)
+
+; SETTINGS TAB ----------------------------------------------------------------
+
+MainTabs.UseTab("Settings")
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
-MainGui.Add("GroupBox", "x815 y356 w340 h300", "Settings")
+MainGui.Add("GroupBox", "x40 y150 w510 h500", "Cycle & Purchase")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-MainGui.Add("Text", "x835 y391 w145 h24", "Repeat every")
-CycleDelayEdit := MainGui.Add("Edit", "x985 y386 w82 h28 Number", Round(Settings.cycleDelay / 1000))
+
+MainGui.Add("Text", "x65 y185 w180 h22", "Repeat mode")
+RepeatModeDropdown := MainGui.Add(
+    "DropDownList",
+    "x255 y180 w240 Choose1",
+    ["Fixed Interval"]
+)
+
+MainGui.Add("Text", "x65 y230 w180 h22", "Repeat every")
+CycleDelayEdit := MainGui.Add(
+    "Edit",
+    "x255 y225 w100 h26 Number",
+    Round(Settings.cycleDelay / 1000)
+)
 MainGui.Add("UpDown", "Range5-600", Round(Settings.cycleDelay / 1000))
-MainGui.Add("Text", "x1075 y391 w45 h24", "sec")
+MainGui.Add("Text", "x365 y230 w60 h22", "seconds")
 
-MainGui.Add("Text", "x835 y430 w145 h24", "Between items")
-BetweenItemsEdit := MainGui.Add("Edit", "x985 y425 w82 h28 Number", Settings.betweenItemsDelay)
+MainGui.Add("Text", "x65 y275 w180 h22", "Between items")
+BetweenItemsEdit := MainGui.Add(
+    "Edit",
+    "x255 y270 w100 h26 Number",
+    Settings.betweenItemsDelay
+)
 MainGui.Add("UpDown", "Range100-5000", Settings.betweenItemsDelay)
-MainGui.Add("Text", "x1075 y430 w45 h24", "ms")
+MainGui.Add("Text", "x365 y275 w80 h22", "ms")
 
-MainGui.Add("Text", "x835 y469 w145 h24", "Max stock attempts")
-MaxStockEdit := MainGui.Add("Edit", "x985 y464 w82 h28 Number", Settings.maxStockAttempts)
+MainGui.Add("Text", "x65 y320 w180 h22", "Max stock attempts")
+MaxStockEdit := MainGui.Add(
+    "Edit",
+    "x255 y315 w100 h26 Number",
+    Settings.maxStockAttempts
+)
 MainGui.Add("UpDown", "Range1-12", Settings.maxStockAttempts)
 
-BuyFullStockCheckbox := MainGui.Add("Checkbox", "x835 y506 w285 h24", "Buy full available stock")
+BuyFullStockCheckbox := MainGui.Add(
+    "Checkbox",
+    "x65 y365 w280 h24",
+    "Buy full available stock"
+)
 BuyFullStockCheckbox.Value := Settings.buyFullStock ? 1 : 0
-
-AutoFocusCheckbox := MainGui.Add("Checkbox", "x835 y539 w285 h24", "Auto-focus Roblox when starting")
-AutoFocusCheckbox.Value := Settings.autoFocusRoblox ? 1 : 0
-
-RememberSelectionsCheckbox := MainGui.Add("Checkbox", "x835 y572 w285 h24", "Remember selections and settings")
-RememberSelectionsCheckbox.Value := Settings.rememberSelections ? 1 : 0
 
 MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
-    "x835 y607 w285 h38",
-    "Fast stock: 8 attempts   •   Shop guard: ON   •   90 ms per press"
+    "x65 y405 w420 h70",
+    "Fast-stock mode sends repeated purchase presses with a fixed safety ceiling. Current default: 8 attempts."
 )
-
-; Primary action --------------------------------------------------------------
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
-StartStopButton := MainGui.Add(
-    "Button",
-    "x815 y674 w340 h44 Default",
-    "Start AutoBuy"
-)
+MainGui.Add("GroupBox", "x580 y150 w500 h500", "Behavior & Safety")
 
 MainGui.SetFont("s9 Norm", "Segoe UI")
-MainGui.Add("Text", "x815 y730 w340 h24 Center", "F1  Start / Stop     •     F2  Exit")
 
-; Events ----------------------------------------------------------------------
+AutoFocusCheckbox := MainGui.Add(
+    "Checkbox",
+    "x605 y185 w330 h24",
+    "Auto-focus Roblox when starting"
+)
+AutoFocusCheckbox.Value := Settings.autoFocusRoblox ? 1 : 0
+
+RememberSelectionsCheckbox := MainGui.Add(
+    "Checkbox",
+    "x605 y225 w330 h24",
+    "Remember selections and settings"
+)
+RememberSelectionsCheckbox.Value := Settings.rememberSelections ? 1 : 0
+
+ShopGuardCheckbox := MainGui.Add(
+    "Checkbox",
+    "x605 y265 w330 h24",
+    "Stop if shop UI is lost"
+)
+ShopGuardCheckbox.Value := Settings.shopGuardEnabled ? 1 : 0
+
+MainGui.Add("Text", "x605 y315 w170 h22", "Purchase press delay")
+FixedPurchaseDelayEdit := MainGui.Add(
+    "Edit",
+    "x790 y310 w90 h26 Number",
+    Settings.fixedPurchaseDelay
+)
+MainGui.Add("UpDown", "Range50-500", Settings.fixedPurchaseDelay)
+MainGui.Add("Text", "x890 y315 w60 h22", "ms")
+
+MainGui.Add("Text", "x605 y360 w170 h22", "Shop open delay")
+ShopOpenDelayEdit := MainGui.Add(
+    "Edit",
+    "x790 y355 w90 h26 Number",
+    Settings.shopOpenDelay
+)
+MainGui.Add("UpDown", "Range500-5000", Settings.shopOpenDelay)
+MainGui.Add("Text", "x890 y360 w60 h22", "ms")
+
+MainGui.SetFont("s8 Norm", "Segoe UI")
+MainGui.Add(
+    "Text",
+    "x605 y410 w420 h100",
+    "Category switching is mouse-anchored: the macro clicks the exact category tab, clicks the first item cash button to establish a known focus point, then uses Down navigation from that anchor."
+)
+
+MainTabs.UseTab()
 
 SearchEdit.OnEvent("Change", (*) => RebuildShopList())
 ClearSearchButton.OnEvent("Click", ClearSearch)
@@ -341,174 +418,33 @@ SelectCategoryButton.OnEvent("Click", (*) => SetCategorySelection(ActiveCategory
 ClearCategoryButton.OnEvent("Click", (*) => SetCategorySelection(ActiveCategory, false))
 ShopList.OnEvent("ItemCheck", OnShopItemCheck)
 StartStopButton.OnEvent("Click", StartStopButtonClicked)
+RepeatModeDropdown.OnEvent("Change", RepeatModeChanged)
+
 MainGui.OnEvent("Close", OnGuiClose)
 
-MainGui.Show("w1180 h780")
+MainGui.Show("w1120 h760")
 
 RebuildShopList()
 RefreshSelectionSummary()
 UpdateRobloxStatus()
 UpdateStatsDisplay()
+RepeatModeChanged()
 
 SetTimer(UpdateRobloxStatus, 1000)
 SetTimer(UpdateRuntimeDisplay, 1000)
 
-; -----------------------------------------------------------------------------
-; GUI / Shop Browser
-; -----------------------------------------------------------------------------
+RepeatModeChanged(*) {
+    global RepeatModeDropdown, CycleDelayEdit, RepeatStatusLabel
 
-CategoryChanged(*) {
-    global CategoryDropdown, ActiveCategory
-    global SelectCategoryButton, ClearCategoryButton
+    IsFixed := RepeatModeDropdown.Text = "Fixed Interval"
+    CycleDelayEdit.Enabled := IsFixed
 
-    ActiveCategory := CategoryDropdown.Text
-
-    SelectCategoryButton.Text := "Select All " ActiveCategory
-    ClearCategoryButton.Text := "Clear " ActiveCategory
-
-    RebuildShopList()
-}
-
-RebuildShopList(*) {
-    global Items, ShopList, VisibleShopItems
-    global SearchEdit, ActiveCategory, IsRefreshingLists
-    global CategorySummaryLabel
-
-    SearchText := StrLower(Trim(SearchEdit.Value))
-
-    IsRefreshingLists := true
-    ShopList.Delete()
-    VisibleShopItems := []
-
-    CategoryTotal := 0
-    VisibleCount := 0
-    SelectedInCategory := 0
-
-    for Item in Items {
-        if Item.category != ActiveCategory {
-            continue
-        }
-
-        CategoryTotal += 1
-
-        if Item.selected {
-            SelectedInCategory += 1
-        }
-
-        if SearchText != "" && !InStr(StrLower(Item.name), SearchText) {
-            continue
-        }
-
-        RowOptions := Item.selected ? "Check" : ""
-        ShopList.Add(RowOptions, Item.name)
-        VisibleShopItems.Push(Item)
-        VisibleCount += 1
-    }
-
-    ShopList.ModifyCol(1, 680)
-    IsRefreshingLists := false
-
-    if SearchText = "" {
-        CategorySummaryLabel.Text := (
-            ActiveCategory
-            "  •  "
-            CategoryTotal
-            " items  •  "
-            SelectedInCategory
-            " selected"
-        )
-    } else {
-        CategorySummaryLabel.Text := (
-            ActiveCategory
-            "  •  "
-            VisibleCount
-            " matching  •  "
-            SelectedInCategory
-            " selected total"
-        )
-    }
-
-    RefreshSelectionSummary()
-}
-
-OnShopItemCheck(Ctrl, Row, Checked) {
-    global VisibleShopItems, IsRefreshingLists
-
-    if IsRefreshingLists {
-        return
-    }
-
-    if Row < 1 || Row > VisibleShopItems.Length {
-        return
-    }
-
-    VisibleShopItems[Row].selected := Checked ? true : false
-
-    SetTimer(RebuildShopList, -1)
-}
-
-ClearSearch(*) {
-    global SearchEdit
-
-    SearchEdit.Value := ""
-    RebuildShopList()
-}
-
-SetCategorySelection(Category, ShouldSelect) {
-    global Items, IsRunning
-
-    if IsRunning {
-        UpdateStatus("Stop AutoBuy before changing selections.")
-        return
-    }
-
-    for Item in Items {
-        if Item.category = Category {
-            Item.selected := ShouldSelect
-        }
-    }
-
-    RebuildShopList()
-}
-
-RefreshSelectionSummary() {
-    global Items, SelectionLabel
-
-    SelectedCount := 0
-
-    for Item in Items {
-        if Item.selected {
-            SelectedCount += 1
-        }
-    }
-
-    SelectionLabel.Text := (
-        "Selected: "
-        SelectedCount
-        " item"
-        (SelectedCount = 1 ? "" : "s")
+    RepeatStatusLabel.Text := (
+        "Repeat: "
+        RepeatModeDropdown.Text
     )
 }
 
-GetSelectedItems() {
-    global Items
-
-    SelectedItems := []
-
-    for Item in Items {
-        if Item.selected {
-            SelectedItems.Push(Item)
-        }
-    }
-
-    return SelectedItems
-}
-
-HasSelectedItems() {
-    return GetSelectedItems().Length > 0
-}
-
-; -----------------------------------------------------------------------------
 ; Hotkeys
 ; -----------------------------------------------------------------------------
 
@@ -677,6 +613,11 @@ RunPurchaseCycle() {
         ; Navigate from the category's starting focus to the first selected item.
         FirstItem := CategoryItems[1]
 
+        global CurrentCategoryFirstDownCount
+        CurrentCategoryFirstDownCount := (
+            Category = "Military" ? 1 : 2
+        )
+
         if !NavigateToPurchaseButton(FirstItem.downCount) {
             break
         }
@@ -827,93 +768,84 @@ OpenShop() {
 }
 
 OpenCategory(Category) {
-    global Settings, CurrentShopCategory
+    global Settings
 
-    ; After OpenShop(), Down moves from the shop header area to the currently
-    ; selected category tab. Roblox remembers the previously selected tab.
-    if !SendToRoblox("{Down}") {
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
         return false
     }
 
-    Sleep(Settings.navigationDelay)
-
-    CategoryPositions := Map(
-        "Factories", 1,
-        "Houses", 2,
-        "Military", 3
-    )
-
-    if !CategoryPositions.Has(Category) {
-        StopImmediately("Unknown category: " Category)
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
         return false
     }
 
-    CurrentCategory := CurrentShopCategory != "" ? CurrentShopCategory : "Factories"
+    ; Stop relying on Roblox's remembered keyboard focus.
+    ; Click the requested category directly.
+    switch Category {
+        case "Factories":
+            TabX := ClientX + Round(ClientWidth * 0.306)
 
-    CurrentPosition := CategoryPositions[CurrentCategory]
-    TargetPosition := CategoryPositions[Category]
-    Difference := TargetPosition - CurrentPosition
+        case "Houses":
+            TabX := ClientX + Round(ClientWidth * 0.433)
 
-    if Difference > 0 {
-        Loop Difference {
-            if !SendToRoblox("{Right}") {
-                return false
-            }
+        case "Military":
+            TabX := ClientX + Round(ClientWidth * 0.561)
 
-            ; The transition into Military is the only one that needs a larger
-            ; pause. Factory/Houses keep the fast timing that already works.
-            if Category = "Military" {
-                Sleep(Settings.militaryTabMoveDelay)
-            } else {
-                Sleep(Settings.categoryDelay)
-            }
-        }
-    } else if Difference < 0 {
-        Loop Abs(Difference) {
-            if !SendToRoblox("{Left}") {
-                return false
-            }
-
-            Sleep(Settings.categoryDelay)
-        }
+        default:
+            StopImmediately("Unknown category: " Category)
+            return false
     }
 
-    ; Military gets an additional settle period before Enter so Roblox has
-    ; time to move the UI-navigation highlight onto the Military tab.
-    if Category = "Military" {
-        Sleep(Settings.militaryTabEnterDelay)
-    }
+    TabY := ClientY + Round(ClientHeight * 0.307)
 
-    if !SendToRoblox("{Enter}") {
+    Click(TabX, TabY)
+    Sleep(Settings.categoryClickDelay)
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Category switch failed - shop lost.")
         return false
     }
 
-    if Category = "Military" {
-        Sleep(Settings.militaryTabEnterDelay)
-    } else {
-        Sleep(Settings.categoryDelay)
-    }
+    ; Anchor directly to the first row's green cash button.
+    ; The screenshots confirm the first item begins at the top after changing
+    ; categories, and Down moves from one cash button to the next.
+    AnchorX := ClientX + Round(ClientWidth * 0.676)
+    AnchorY := ClientY + Round(ClientHeight * 0.529)
 
-    CurrentShopCategory := Category
+    Click(AnchorX, AnchorY)
+    Sleep(Settings.itemAnchorDelay)
+
     return true
 }
 
 NavigateToPurchaseButton(DownCount) {
     global Settings
 
-    Loop DownCount {
-        Sleep(Settings.navigationDelay)
+    ; OpenCategory() anchors to the first item cash button.
+    ; Convert the old per-category downCount to zero-based movement:
+    ;   Factories/Houses first item = downCount 2
+    ;   Military first item = downCount 1
+    ;
+    ; Determine the active category from the down-count convention through the
+    ; current item metadata before this function is called. To keep the call
+    ; signature stable, FirstItemOffset is set by the caller.
+    global CurrentCategoryFirstDownCount
 
-        if !SendToRoblox("{Down}") {
-            return false
-        }
-    }
+    StepsDown := DownCount - CurrentCategoryFirstDownCount
 
-    if !SendToRoblox("{Right}") {
+    if StepsDown < 0 {
+        StopImmediately("Invalid item position.")
         return false
     }
 
-    Sleep(Settings.itemFocusDelay)
+    Loop StepsDown {
+        if !SendToRoblox("{Down}") {
+            return false
+        }
+
+        Sleep(Settings.navigationDelay)
+    }
 
     return true
 }
@@ -1125,7 +1057,8 @@ ApplySettingsFromGui() {
     global Settings
     global CycleDelayEdit, BetweenItemsEdit, MaxStockEdit
     global AutoFocusCheckbox, RememberSelectionsCheckbox
-    global BuyFullStockCheckbox
+    global BuyFullStockCheckbox, ShopGuardCheckbox
+    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown
 
     CycleSecondsValue := ReadClampedInteger(
         CycleDelayEdit,
@@ -1158,6 +1091,20 @@ ApplySettingsFromGui() {
     Settings.buyFullStock := BuyFullStockCheckbox.Value = 1
     Settings.autoFocusRoblox := AutoFocusCheckbox.Value = 1
     Settings.rememberSelections := RememberSelectionsCheckbox.Value = 1
+    Settings.shopGuardEnabled := ShopGuardCheckbox.Value = 1
+    Settings.fixedPurchaseDelay := ReadClampedInteger(
+        FixedPurchaseDelayEdit,
+        90,
+        50,
+        500
+    )
+    Settings.shopOpenDelay := ReadClampedInteger(
+        ShopOpenDelayEdit,
+        1200,
+        500,
+        5000
+    )
+    Settings.repeatMode := RepeatModeDropdown.Text
 }
 
 ReadClampedInteger(Control, DefaultValue, MinimumValue, MaximumValue) {
