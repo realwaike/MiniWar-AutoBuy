@@ -3,7 +3,7 @@
 
 ; =============================================================================
 ; MiniWar AutoBuy
-; v2.5.3 Focus Sync Test Build
+; v2.5.4 Navigation Reset Test Build
 ;
 ; Complete shop coverage, larger UI, search/filtering, per-category controls,
 ; configurable cycle timing, runtime statistics, Roblox status, settings
@@ -14,7 +14,7 @@
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.5.3-focus-sync-test"
+AppVersion := "v2.5.4-nav-reset-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -820,64 +820,69 @@ OpenShop() {
 OpenCategory(Category) {
     global Settings
 
-    if Settings.shopGuardEnabled && !IsShopVisible() {
-        StopImmediately("Shop lost - AutoBuy stopped for safety.")
-        return false
-    }
-
-    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
-        StopImmediately("Could not read Roblox window position.")
-        return false
-    }
-
-    ; Temporarily leave Roblox UI Navigation before using the mouse.
-    ; Mouse selection and Roblox UI-navigation selection are separate states.
-    Send("\")
-    Sleep(80)
-
-    ; Click the requested category tab using the current Roblox client size.
     switch Category {
         case "Factories":
-            TabX := ClientX + Round(ClientWidth * 0.305)
+            if !SendToRoblox("{Down}") {
+                return false
+            }
+
+            Sleep(Settings.navigationDelay)
+
+            if !SendToRoblox("{Enter}") {
+                return false
+            }
+
+            Sleep(Settings.navigationDelay)
+            return true
 
         case "Houses":
-            TabX := ClientX + Round(ClientWidth * 0.430)
+            if !SendToRoblox("{Down}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+
+            if !SendToRoblox("{Enter}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+            return true
 
         case "Military":
-            TabX := ClientX + Round(ClientWidth * 0.555)
+            if !SendToRoblox("{Down}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            if !SendToRoblox("{Right}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+
+            if !SendToRoblox("{Enter}") {
+                return false
+            }
+
+            Sleep(Settings.categoryDelay)
+            return true
 
         default:
             StopImmediately("Unknown category: " Category)
             return false
     }
-
-    TabY := ClientY + Round(ClientHeight * 0.305)
-
-    Click(TabX, TabY)
-    Sleep(140)
-
-    if Settings.shopGuardEnabled && !IsShopVisible() {
-        StopImmediately("Category switch failed - shop lost.")
-        return false
-    }
-
-    ; Re-enable UI Navigation while the mouse is parked on the selected tab.
-    ; This is intended to re-anchor keyboard navigation inside the shop rather
-    ; than leaving it on Auto Collect / Invite Friends / other world UI.
-    Send("\")
-    Sleep(160)
-
-    ; Activate the currently focused category control and allow the list to
-    ; settle before item navigation begins.
-    Send("{Enter}")
-    Sleep(Settings.categoryDelay)
-
-    if Settings.shopGuardEnabled && !IsShopVisible() {
-        StopImmediately("Shop focus sync failed.")
-        return false
-    }
-
-    return true
 }
 
 NavigateToPurchaseButton(DownCount) {
@@ -943,12 +948,23 @@ CloseShopSafely() {
         return false
     }
 
+    ; IMPORTANT:
+    ; The purchase sweep uses Roblox UI Navigation, so it is still ON here.
+    ; Disable it BEFORE the mouse closes the shop. Otherwise Roblox remembers
+    ; the previous cash button as its selected UI object, and the next shop
+    ; opening can begin from that stale focus and wander into unrelated UI.
+    Send("\")
+    Sleep(90)
+
+    ; Close the visible shop with the mouse while UI Navigation is OFF.
     CloseX := ClientX + Round(ClientWidth * 0.735)
     CloseY := ClientY + Round(ClientHeight * 0.215)
 
     Click(CloseX, CloseY)
     Sleep(Settings.shopCloseDelay)
 
+    ; OpenShop() deliberately starts with "\". Because navigation is now OFF,
+    ; that next "\" will always ENABLE it from a clean state.
     return true
 }
 
