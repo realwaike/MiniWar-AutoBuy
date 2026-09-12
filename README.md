@@ -2,11 +2,11 @@
 
 A Windows AutoHotkey v2 macro for automating repeated purchases from the rotating **Shopkeeper** shop in the Roblox game **Mini War**.
 
-> **Current status:** `v3.4.0-fast-strict-test` — active test build. The project is functional, but the visual positioning/recovery system is still being tuned for long unattended sessions.
+> **Development status:** the repository currently contains `v3.3.0-button-lock-test` on `main`; `v3.4.0-fast-strict-test` is the current candidate being validated before it replaces the main script.
 
 ## What it does
 
-MiniWar AutoBuy lets you select the exact shop items you want and automatically works through the Factory, Houses, and Military sections. The current build combines calibrated scrolling with visual cash-button detection so it can recover from small positioning errors instead of relying only on fixed keyboard sequences.
+MiniWar AutoBuy lets you select the exact shop items you want and automatically works through the Factory, Houses, and Military sections. The current development build combines calibrated scrolling with visual cash-button detection so it can recover from small positioning errors instead of relying only on fixed keyboard sequences.
 
 ### Current features
 
@@ -26,7 +26,7 @@ MiniWar AutoBuy lets you select the exact shop items you want and automatically 
   - Military: 61 wheel steps top-to-bottom
 - Visual green cash-button locking near the calculated item position
 - Fast redundant purchase bursts for multi-stock items
-- Strict cycle completion: a cycle is not reported complete unless every selected item succeeds
+- Strict cycle completion in the v3.4 candidate: a cycle is not reported complete unless every selected item succeeds
 - Item retry/recovery logic
 - Runtime counters and current-item progress
 - Persistent selections/settings through `MiniWar-AutoBuy.ini`
@@ -71,7 +71,7 @@ Buy (top button)
 
 For each selected category, the macro resets the category to the top, calculates the approximate scroll position for each selected item, then visually searches near that position for the green cash button before clicking.
 
-If an item cannot be purchased successfully, the macro retries that item instead of silently skipping it. A cycle is only counted as complete when all selected items have completed successfully.
+The v3.4 candidate adds stricter retry/completion accounting so a failed item cannot silently turn into a false “cycle complete” result.
 
 ## Shop coverage
 
@@ -101,7 +101,7 @@ Important runtime settings include:
 - shop guard
 - saved selections/settings
 
-The current default purchase logic uses redundant click attempts to improve reliability for multi-stock items. This is intentionally more than the expected stock count because Roblox can occasionally drop rapid inputs.
+The current purchase logic uses redundant click attempts to improve reliability for multi-stock items. This is intentionally more than the expected stock count because Roblox can occasionally drop rapid inputs.
 
 ## Safety / recovery behavior
 
@@ -111,6 +111,7 @@ No screen automation can be guaranteed against every possible Roblox update, lag
 
 ## Known work in progress
 
+- validate `v3.4.0-fast-strict-test` and promote it to `main`
 - further improve item-position accuracy across long categories
 - reduce missed cash-button clicks
 - improve full-stock reliability while keeping purchase bursts fast
@@ -122,7 +123,7 @@ See [`ROADMAP.md`](ROADMAP.md) and [`TESTING.md`](TESTING.md) for current develo
 
 ## Project files
 
-- `MiniWar-AutoBuy.ahk` — main application
+- `MiniWar-AutoBuy.ahk` — current main application build
 - `README.md` — project overview
 - `CHANGELOG.md` — version history
 - `ROADMAP.md` — planned work
