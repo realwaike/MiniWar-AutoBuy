@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v3.2.0-calibrated-scroll-test"
+AppVersion := "v3.3.0-button-lock-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -35,7 +35,7 @@ Settings := {
     ; The macro cannot read the visible stock number, so it safely attempts
     ; the same focused purchase button up to this many times.
     buyFullStock: true,
-    maxStockAttempts: 8,
+    maxStockAttempts: 10,
 
     ; Purchase timing.
     purchaseClickDelay: 250,
@@ -71,7 +71,15 @@ Settings := {
     ; User-measured full scroll ranges from category top to category bottom.
     factoryTotalScrolls: 61,
     housesTotalScrolls: 30,
-    militaryTotalScrolls: 61
+    militaryTotalScrolls: 61,
+
+    ; Purchase reliability.
+    ; We intentionally send more than five click attempts so occasional dropped
+    ; Roblox inputs do not leave stock behind.
+    minimumStockTarget: 5,
+    reliablePurchaseAttempts: 10,
+    reliableClickDelay: 125,
+    buttonSearchRadiusY: 95
 }
 
 ; -----------------------------------------------------------------------------
@@ -353,7 +361,7 @@ MaxStockEdit := MainGui.Add(
     "x255 y315 w100 h26 Number",
     Settings.maxStockAttempts
 )
-MainGui.Add("UpDown", "Range1-12", Settings.maxStockAttempts)
+MainGui.Add("UpDown", "Range5-12", Settings.maxStockAttempts)
 
 BuyFullStockCheckbox := MainGui.Add(
     "Checkbox",
@@ -366,7 +374,7 @@ MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x65 y405 w420 h70",
-    "Fast-stock mode sends repeated purchase presses with a fixed safety ceiling. Current default: 8 attempts."
+    "Reliable-stock mode sends 10 click attempts by default, with a minimum setting of 5, and periodically re-locks onto the detected green cash button."
 )
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
@@ -1005,19 +1013,33 @@ ClickCalibratedCashButton(UseBottomRow := false) {
         return false
     }
 
-    CashX := ClientX + Round(ClientWidth * 0.680)
+    ; The calibrated scroll position gets us close to the correct row.
+    ; Do NOT trust a fixed Y coordinate from here. Find the actual bright-green
+    ; cash button in a local vertical search window and click its real center.
+    ExpectedY := (
+        UseBottomRow
+        ? ClientY + Round(ClientHeight * 0.785)
+        : ClientY + Round(ClientHeight * 0.555)
+    )
 
-    if UseBottomRow {
-        CashY := ClientY + Round(ClientHeight * 0.785)
-    } else {
-        CashY := ClientY + Round(ClientHeight * 0.555)
+    if !FindNearestCashButton(ExpectedY, &CashX, &CashY) {
+        ; A small alignment correction handles cases where Roblox consumed a
+        ; wheel notch differently than expected.
+        if !FineAlignCashButton(ExpectedY, &CashX, &CashY) {
+            UpdateStatus("Could not lock onto cash button.")
+            return false
+        }
     }
 
     MouseMove(CashX, CashY, 0)
+    Sleep(50)
 
-    Attempts := Settings.buyFullStock ? Settings.maxStockAttempts : 1
+    ; Use a reliability burst. Ten attempts gives enough redundancy to clear at
+    ; least five units even if Roblox drops a few rapid inputs.
+    Attempts := Settings.buyFullStock
+        ? Max(Settings.maxStockAttempts, Settings.reliablePurchaseAttempts)
+        : 1
 
-    ; Finish every purchase burst completely BEFORE any scrolling happens.
     Loop Attempts {
         if !IsRunning || IsStopRequested {
             return true
@@ -1028,12 +1050,179 @@ ClickCalibratedCashButton(UseBottomRow := false) {
             return false
         }
 
-        Click()
-        Sleep(Settings.fixedPurchaseDelay)
+        ; Re-lock periodically in case the button shifts slightly while stock
+        ; updates or the list settles.
+        if Mod(A_Index - 1, 3) = 0 {
+            if FindNearestCashButton(CashY, &LockedX, &LockedY) {
+                CashX := LockedX
+                CashY := LockedY
+                MouseMove(CashX, CashY, 0)
+            }
+        }
+
+        ; Explicit down/up is more consistent in Roblox than a zero-duration
+        ; Click() burst.
+        Click("Down")
+        Sleep(24)
+        Click("Up")
+
+        Sleep(Settings.reliableClickDelay)
     }
 
-    Sleep(60)
+    Sleep(100)
     return true
+}
+
+FindNearestCashButton(ExpectedY, &CashX, &CashY) {
+    global Settings
+
+    CashX := 0
+    CashY := 0
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    ; The green cash buttons occupy the right purchase column.
+    SearchLeft := ClientX + Round(ClientWidth * 0.605)
+    SearchRight := ClientX + Round(ClientWidth * 0.745)
+
+    SearchTop := Max(
+        ClientY + Round(ClientHeight * 0.345),
+        ExpectedY - Settings.buttonSearchRadiusY
+    )
+
+    SearchBottom := Min(
+        ClientY + Round(ClientHeight * 0.845),
+        ExpectedY + Settings.buttonSearchRadiusY
+    )
+
+    CandidateCenters := []
+
+    ; Sample multiple X positions through the button. A valid green run must be
+    ; present across most of them, which avoids matching the green world behind
+    ; the translucent shop.
+    SampleXs := [
+        SearchLeft + Round((SearchRight - SearchLeft) * 0.25),
+        SearchLeft + Round((SearchRight - SearchLeft) * 0.50),
+        SearchLeft + Round((SearchRight - SearchLeft) * 0.75)
+    ]
+
+    Y := SearchTop
+    InRun := false
+    RunStart := 0
+    LastMatch := 0
+
+    while Y <= SearchBottom {
+        Votes := 0
+
+        for SampleX in SampleXs {
+            Color := PixelGetColor(SampleX, Y, "RGB")
+
+            Red := (Color >> 16) & 0xFF
+            Green := (Color >> 8) & 0xFF
+            Blue := Color & 0xFF
+
+            IsCashGreen := (
+                Green >= 120
+                && Green >= Red * 1.10
+                && Green >= Blue * 1.08
+            )
+
+            if IsCashGreen {
+                Votes += 1
+            }
+        }
+
+        if Votes >= 2 {
+            if !InRun {
+                InRun := true
+                RunStart := Y
+            }
+
+            LastMatch := Y
+        } else if InRun {
+            RunHeight := LastMatch - RunStart
+
+            if RunHeight >= 24 {
+                CandidateCenters.Push(
+                    Round((RunStart + LastMatch) / 2)
+                )
+            }
+
+            InRun := false
+            RunStart := 0
+            LastMatch := 0
+        }
+
+        Y += 3
+    }
+
+    if InRun {
+        RunHeight := LastMatch - RunStart
+
+        if RunHeight >= 24 {
+            CandidateCenters.Push(
+                Round((RunStart + LastMatch) / 2)
+            )
+        }
+    }
+
+    if CandidateCenters.Length = 0 {
+        return false
+    }
+
+    BestY := CandidateCenters[1]
+    BestDistance := Abs(BestY - ExpectedY)
+
+    for CandidateY in CandidateCenters {
+        Distance := Abs(CandidateY - ExpectedY)
+
+        if Distance < BestDistance {
+            BestDistance := Distance
+            BestY := CandidateY
+        }
+    }
+
+    CashX := Round((SearchLeft + SearchRight) / 2)
+    CashY := BestY
+    return true
+}
+
+FineAlignCashButton(ExpectedY, &CashX, &CashY) {
+    global Settings
+
+    CashX := 0
+    CashY := 0
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    ListX := ClientX + Round(ClientWidth * 0.620)
+    ListY := ClientY + Round(ClientHeight * 0.610)
+    MouseMove(ListX, ListY, 0)
+
+    ; Search a few notches in each direction around the calibrated position.
+    Loop 3 {
+        Send("{WheelUp}")
+        Sleep(55)
+
+        if FindNearestCashButton(ExpectedY, &CashX, &CashY) {
+            return true
+        }
+    }
+
+    Loop 6 {
+        Send("{WheelDown}")
+        Sleep(55)
+
+        if FindNearestCashButton(ExpectedY, &CashX, &CashY) {
+            return true
+        }
+    }
+
+    return false
 }
 
 EnsureShopOpen() {
@@ -1923,8 +2112,8 @@ ApplySettingsFromGui() {
 
     MaxStockValue := ReadClampedInteger(
         MaxStockEdit,
-        8,
-        1,
+        10,
+        5,
         12
     )
 
