@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v3.0.0-self-healing-test"
+AppVersion := "v3.1.0-shopkeeper-recovery-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -423,7 +423,7 @@ MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x605 y455 w420 h100",
-    "Self-healing mouse mode: the macro verifies shop rows visually, advances exactly one row at a time, and rebuilds its position from the top if alignment is lost."
+    "Self-healing mode uses the real Buy → Shopkeeper → E route, verifies the rotating shop before every action, and recovers from lost shop state without touching the premium Shop button."
 )
 
 MainTabs.UseTab()
@@ -869,7 +869,7 @@ RunPurchaseCycle() {
 EnsureShopOpen() {
     global Settings
 
-    if IsShopVisible() {
+    if IsShopkeeperShopVisible() {
         return true
     }
 
@@ -878,9 +878,12 @@ EnsureShopOpen() {
         return false
     }
 
-    ; Click the permanent Shop button on the left-side Roblox HUD.
-    ShopX := ClientX + Round(ClientWidth * 0.050)
-    ShopY := ClientY + Round(ClientHeight * 0.325)
+    ; IMPORTANT:
+    ; The left-side red basket opens the PREMIUM/CRATE shop.
+    ; The rotating Wheat/Corn/etc. shop is reached through the top Buy button,
+    ; which teleports the player to the Shopkeeper NPC. Then E opens the shop.
+    BuyX := ClientX + Round(ClientWidth * 0.325)
+    BuyY := ClientY + Round(ClientHeight * 0.055)
 
     Loop Settings.stateRetryLimit {
         if !WinActive(Settings.robloxWindow) {
@@ -888,18 +891,32 @@ EnsureShopOpen() {
             return false
         }
 
-        Click(ShopX, ShopY)
+        UpdateStatus("Returning to Shopkeeper...")
 
-        Loop 20 {
-            Sleep(100)
+        Click(BuyX, BuyY)
 
-            if IsShopVisible() {
-                return true
-            }
+        ; Allow the Buy teleport / camera relocation to finish.
+        Sleep(900)
+
+        ; The Shopkeeper interaction prompt uses E.
+        Send("e")
+        Sleep(700)
+
+        if IsShopkeeperShopVisible() {
+            return true
+        }
+
+        ; A second E covers slower interaction-prompt initialization without
+        ; clicking unrelated HUD buttons.
+        Send("e")
+        Sleep(700)
+
+        if IsShopkeeperShopVisible() {
+            return true
         }
     }
 
-    StopImmediately("Could not open the shop.")
+    StopImmediately("Could not reach the Shopkeeper shop.")
     return false
 }
 
@@ -1549,6 +1566,10 @@ CloseShopSafely() {
 }
 
 IsShopVisible() {
+    return IsShopkeeperShopVisible()
+}
+
+IsShopkeeperShopVisible() {
     global Settings
 
     if !WinActive(Settings.robloxWindow) {
@@ -1559,39 +1580,60 @@ IsShopVisible() {
         return false
     }
 
+    ; Verify the SPECIFIC Shopkeeper shop, not just any Mini War modal.
+    ;
+    ; Anchor 1: cyan Shop! header.
     HeaderLeft := ClientX + Round(ClientWidth * 0.22)
-    HeaderTop := ClientY + Round(ClientHeight * 0.14)
+    HeaderTop := ClientY + Round(ClientHeight * 0.13)
     HeaderRight := ClientX + Round(ClientWidth * 0.50)
-    HeaderBottom := ClientY + Round(ClientHeight * 0.27)
+    HeaderBottom := ClientY + Round(ClientHeight * 0.25)
 
+    ; Anchor 2: yellow Restock button unique to this shop.
+    RestockLeft := ClientX + Round(ClientWidth * 0.52)
+    RestockTop := ClientY + Round(ClientHeight * 0.14)
+    RestockRight := ClientX + Round(ClientWidth * 0.70)
+    RestockBottom := ClientY + Round(ClientHeight * 0.27)
+
+    ; Anchor 3: red close button.
     CloseLeft := ClientX + Round(ClientWidth * 0.68)
-    CloseTop := ClientY + Round(ClientHeight * 0.14)
+    CloseTop := ClientY + Round(ClientHeight * 0.13)
     CloseRight := ClientX + Round(ClientWidth * 0.78)
     CloseBottom := ClientY + Round(ClientHeight * 0.28)
 
     HasBlueHeader := PixelSearch(
-        &FoundHeaderX,
-        &FoundHeaderY,
+        &HeaderX,
+        &HeaderY,
         HeaderLeft,
         HeaderTop,
         HeaderRight,
         HeaderBottom,
         0x55BFEA,
-        85
+        90
+    )
+
+    HasYellowRestock := PixelSearch(
+        &RestockX,
+        &RestockY,
+        RestockLeft,
+        RestockTop,
+        RestockRight,
+        RestockBottom,
+        0xF0C832,
+        90
     )
 
     HasRedClose := PixelSearch(
-        &FoundCloseX,
-        &FoundCloseY,
+        &CloseX,
+        &CloseY,
         CloseLeft,
         CloseTop,
         CloseRight,
         CloseBottom,
         0xE83434,
-        85
+        90
     )
 
-    return HasBlueHeader && HasRedClose
+    return HasBlueHeader && HasYellowRestock && HasRedClose
 }
 
 GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
