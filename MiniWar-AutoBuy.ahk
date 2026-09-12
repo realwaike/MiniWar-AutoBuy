@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v3.1.0-shopkeeper-recovery-test"
+AppVersion := "v3.2.0-calibrated-scroll-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -63,12 +63,15 @@ Settings := {
     categoryClickDelay: 180,
     itemAnchorDelay: 160,
 
-    ; Self-healing mouse-only shop sweep.
+    ; Calibrated mouse-only shop sweep.
     mouseOnlyPurchasing: true,
-    wheelStepDelay: 35,
-    rowAlignmentTolerance: 14,
-    rowAdvanceMaxAttempts: 12,
-    stateRetryLimit: 3
+    wheelStepDelay: 22,
+    stateRetryLimit: 3,
+
+    ; User-measured full scroll ranges from category top to category bottom.
+    factoryTotalScrolls: 61,
+    housesTotalScrolls: 30,
+    militaryTotalScrolls: 61
 }
 
 ; -----------------------------------------------------------------------------
@@ -410,20 +413,18 @@ ShopOpenDelayEdit := MainGui.Add(
 MainGui.Add("UpDown", "Range500-5000", Settings.shopOpenDelay)
 MainGui.Add("Text", "x890 y360 w60 h22", "ms")
 
-MainGui.Add("Text", "x605 y400 w170 h22", "Row align tolerance")
-RowToleranceEdit := MainGui.Add(
-    "Edit",
-    "x790 y395 w90 h26 Number",
-    Settings.rowAlignmentTolerance
+MainGui.Add("Text", "x605 y400 w170 h22", "Scroll calibration")
+MainGui.Add(
+    "Text",
+    "x790 y400 w210 h44",
+    "Factory 61   •   Houses 30`nMilitary 61"
 )
-MainGui.Add("UpDown", "Range6-30", Settings.rowAlignmentTolerance)
-MainGui.Add("Text", "x890 y400 w60 h22", "px")
 
 MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x605 y455 w420 h100",
-    "Self-healing mode uses the real Buy → Shopkeeper → E route, verifies the rotating shop before every action, and recovers from lost shop state without touching the premium Shop button."
+    "Calibrated mode uses the real Buy → Shopkeeper → E route. Category tabs reset to the top, then measured scroll ranges position each item deterministically before the full purchase burst."
 )
 
 MainTabs.UseTab()
@@ -738,7 +739,6 @@ RunPurchaseCycle() {
     global Settings
     global IsRunning, IsCycleActive, IsStopRequested
     global CyclesCompleted, PurchaseAttempts, Items
-    global CurrentRowAnchorY
 
     if !IsRunning || IsCycleActive {
         return
@@ -790,43 +790,58 @@ RunPurchaseCycle() {
 
         UpdateStatus("Preparing " Category "...")
 
-        if !PrepareVisualCategory(Category) {
+        ; Clicking the category tab is our deterministic reset-to-top operation.
+        if !ResetCategoryToTop(Category) {
             break
         }
+
+        CurrentScrollPosition := 0
 
         for ItemIndex, Item in CategoryItems {
             if !IsRunning || IsStopRequested {
                 break
             }
 
-            if Item.selected {
-                OverallIndex += 1
-
-                UpdateStatus("Buying " Item.name "...")
-                UpdateCurrentProgress(
-                    Item.name,
-                    OverallIndex " of " TotalSelected
-                )
-
-                PurchaseAttempts += 1
-                UpdateStatsDisplay()
-
-                if !ClickAnchoredCashButton() {
-                    break
-                }
+            if !Item.selected {
+                continue
             }
 
-            if ItemIndex < CategoryItems.Length {
-                if !AdvanceExactlyOneShopRow() {
-                    UpdateStatus("Recovering " Category " position...")
+            TargetScrollPosition := GetTargetScrollPosition(
+                Category,
+                ItemIndex,
+                CategoryItems.Length
+            )
 
-                    if !RecoverCategoryPosition(Category, ItemIndex + 1) {
-                        StopImmediately(
-                            "Could not recover shop position - AutoBuy stopped."
-                        )
-                        break
-                    }
+            ScrollDifference := TargetScrollPosition - CurrentScrollPosition
+
+            if ScrollDifference > 0 {
+                if !ScrollShopBy(ScrollDifference) {
+                    break
                 }
+
+                CurrentScrollPosition := TargetScrollPosition
+            }
+
+            OverallIndex += 1
+
+            UpdateStatus("Buying " Item.name "...")
+            UpdateCurrentProgress(
+                Item.name,
+                OverallIndex " of " TotalSelected
+            )
+
+            PurchaseAttempts += 1
+            UpdateStatsDisplay()
+
+            ; At the absolute bottom, the final item occupies the lower visible
+            ; row. Otherwise the calibrated target places the item in the top row.
+            UseBottomRow := (
+                ItemIndex = CategoryItems.Length
+                && TargetScrollPosition = GetCategoryTotalScrolls(Category)
+            )
+
+            if !ClickCalibratedCashButton(UseBottomRow) {
+                break
             }
         }
 
@@ -840,7 +855,6 @@ RunPurchaseCycle() {
     if IsStopRequested {
         IsRunning := false
         IsStopRequested := false
-
         UpdateStartStopButton()
         UpdateStatus("Stopped")
         UpdateCurrentProgress("—", "—")
@@ -862,8 +876,164 @@ RunPurchaseCycle() {
 
     UpdateCurrentProgress("—", "Cycle complete")
 
-    ; Leave the shop open. The next cycle re-validates everything before acting.
+    ; Keep the Shopkeeper shop open. Every new category click resets its list
+    ; to the top, and the next cycle re-verifies the shop before acting.
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
+}
+
+ResetCategoryToTop(Category) {
+    global Settings
+
+    if !EnsureShopOpen() {
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
+        return false
+    }
+
+    switch Category {
+        case "Factories":
+            TabX := ClientX + Round(ClientWidth * 0.307)
+
+        case "Houses":
+            TabX := ClientX + Round(ClientWidth * 0.435)
+
+        case "Military":
+            TabX := ClientX + Round(ClientWidth * 0.563)
+
+        default:
+            StopImmediately("Unknown category: " Category)
+            return false
+    }
+
+    TabY := ClientY + Round(ClientHeight * 0.307)
+
+    Click(TabX, TabY)
+    Sleep(Settings.categoryClickDelay)
+
+    if !IsShopkeeperShopVisible() {
+        StopImmediately("Category switch failed - Shopkeeper shop lost.")
+        return false
+    }
+
+    return true
+}
+
+GetCategoryTotalScrolls(Category) {
+    global Settings
+
+    switch Category {
+        case "Factories":
+            return Settings.factoryTotalScrolls
+
+        case "Houses":
+            return Settings.housesTotalScrolls
+
+        case "Military":
+            return Settings.militaryTotalScrolls
+
+        default:
+            return 0
+    }
+}
+
+GetTargetScrollPosition(Category, ItemIndex, ItemCount) {
+    TotalScrolls := GetCategoryTotalScrolls(Category)
+
+    if ItemCount <= 1 || ItemIndex <= 1 {
+        return 0
+    }
+
+    if ItemIndex >= ItemCount {
+        return TotalScrolls
+    }
+
+    ; Distribute the measured full scroll range evenly across the spaces
+    ; between shop items. This naturally produces the required 2/3-notch
+    ; pattern without accumulating rounding error.
+    return Round(
+        (ItemIndex - 1)
+        * TotalScrolls
+        / (ItemCount - 1)
+    )
+}
+
+ScrollShopBy(ScrollCount) {
+    global Settings
+
+    if ScrollCount <= 0 {
+        return true
+    }
+
+    if !IsShopkeeperShopVisible() {
+        StopImmediately("Shop lost before scrolling.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    ; Keep the cursor in the shop-list body for the entire scroll operation.
+    ListX := ClientX + Round(ClientWidth * 0.620)
+    ListY := ClientY + Round(ClientHeight * 0.610)
+    MouseMove(ListX, ListY, 0)
+
+    Loop ScrollCount {
+        if !IsRunning || IsStopRequested {
+            return false
+        }
+
+        Send("{WheelDown}")
+        Sleep(Settings.wheelStepDelay)
+    }
+
+    return IsShopkeeperShopVisible()
+}
+
+ClickCalibratedCashButton(UseBottomRow := false) {
+    global Settings
+
+    if !IsShopkeeperShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    CashX := ClientX + Round(ClientWidth * 0.680)
+
+    if UseBottomRow {
+        CashY := ClientY + Round(ClientHeight * 0.785)
+    } else {
+        CashY := ClientY + Round(ClientHeight * 0.555)
+    }
+
+    MouseMove(CashX, CashY, 0)
+
+    Attempts := Settings.buyFullStock ? Settings.maxStockAttempts : 1
+
+    ; Finish every purchase burst completely BEFORE any scrolling happens.
+    Loop Attempts {
+        if !IsRunning || IsStopRequested {
+            return true
+        }
+
+        if !IsShopkeeperShopVisible() {
+            StopImmediately("Shop lost during purchase burst.")
+            return false
+        }
+
+        Click()
+        Sleep(Settings.fixedPurchaseDelay)
+    }
+
+    Sleep(60)
+    return true
 }
 
 EnsureShopOpen() {
@@ -1735,7 +1905,7 @@ ApplySettingsFromGui() {
     global CycleDelayEdit, BetweenItemsEdit, MaxStockEdit
     global AutoFocusCheckbox, RememberSelectionsCheckbox
     global BuyFullStockCheckbox, ShopGuardCheckbox
-    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown, RowToleranceEdit
+    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown
 
     CycleSecondsValue := ReadClampedInteger(
         CycleDelayEdit,
@@ -1780,12 +1950,6 @@ ApplySettingsFromGui() {
         1200,
         500,
         5000
-    )
-    Settings.rowAlignmentTolerance := ReadClampedInteger(
-        RowToleranceEdit,
-        14,
-        6,
-        30
     )
     Settings.repeatMode := RepeatModeDropdown.Text
 }
