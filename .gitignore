@@ -1,0 +1,6 @@
+# Local MiniWar AutoBuy preferences
+MiniWar-AutoBuy.ini
+
+# Local debug/log output
+*.log
+*.tmp
