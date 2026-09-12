@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.6.3-cash-column-test"
+AppVersion := "v2.7.0-mouse-only-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -61,7 +61,12 @@ Settings := {
 
     ; Mouse-anchored category navigation.
     categoryClickDelay: 180,
-    itemAnchorDelay: 160
+    itemAnchorDelay: 160,
+
+    ; Mouse-only shop sweep.
+    mouseOnlyPurchasing: true,
+    wheelStepsPerItem: 3,
+    wheelStepDelay: 35
 }
 
 ; -----------------------------------------------------------------------------
@@ -402,11 +407,19 @@ ShopOpenDelayEdit := MainGui.Add(
 MainGui.Add("UpDown", "Range500-5000", Settings.shopOpenDelay)
 MainGui.Add("Text", "x890 y360 w60 h22", "ms")
 
+MainGui.Add("Text", "x605 y400 w170 h22", "Wheel steps / item")
+WheelStepsEdit := MainGui.Add(
+    "Edit",
+    "x790 y395 w90 h26 Number",
+    Settings.wheelStepsPerItem
+)
+MainGui.Add("UpDown", "Range1-8", Settings.wheelStepsPerItem)
+
 MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
-    "x605 y410 w420 h100",
-    "Category switching is mouse-anchored: the macro switches tabs, anchors the first item row, moves onto the green cash column, then sweeps downward through that column."
+    "x605 y455 w420 h100",
+    "Mouse-only shop mode: category tabs, scrolling, and green cash buttons are controlled directly with the mouse. Roblox UI Navigation is not used while buying."
 )
 
 MainTabs.UseTab()
@@ -720,7 +733,7 @@ StopImmediately(Message) {
 RunPurchaseCycle() {
     global Settings
     global IsRunning, IsCycleActive, IsStopRequested
-    global CyclesCompleted, PurchaseAttempts
+    global CyclesCompleted, PurchaseAttempts, Items
 
     if !IsRunning || IsCycleActive {
         return
@@ -744,15 +757,16 @@ RunPurchaseCycle() {
             break
         }
 
-        CategoryItems := []
+        HasSelectedInCategory := false
 
-        for Item in SelectedItems {
-            if Item.category = Category {
-                CategoryItems.Push(Item)
+        for Item in Items {
+            if Item.category = Category && Item.selected {
+                HasSelectedInCategory := true
+                break
             }
         }
 
-        if CategoryItems.Length = 0 {
+        if !HasSelectedInCategory {
             continue
         }
 
@@ -762,74 +776,57 @@ RunPurchaseCycle() {
             break
         }
 
-        if !OpenCategory(Category) {
+        ; OpenShop's proven sequence leaves Roblox UI Navigation enabled.
+        ; Turn it OFF before the mouse-only sweep begins.
+        Send("\")
+        Sleep(100)
+
+        if !PrepareMouseCategory(Category) {
             break
         }
 
-        ; Navigate from the category's starting focus to the first selected item.
-        FirstItem := CategoryItems[1]
+        CategoryItems := []
 
-        global CurrentCategoryFirstDownCount
-        CurrentCategoryFirstDownCount := (
-            Category = "Military" ? 1 : 2
-        )
-
-        if !NavigateToPurchaseButton(FirstItem.downCount) {
-            break
+        for Item in Items {
+            if Item.category = Category {
+                CategoryItems.Push(Item)
+            }
         }
 
-        PreviousDownCount := FirstItem.downCount
-
-        for CategoryIndex, Item in CategoryItems {
+        for ItemIndex, Item in CategoryItems {
             if !IsRunning || IsStopRequested {
                 break
             }
 
-            OverallIndex += 1
+            if Item.selected {
+                OverallIndex += 1
 
-            ; After a purchase, focus remains on that item's green cash button.
-            ; Moving Down advances directly to the next item's cash button.
-            if CategoryIndex > 1 {
-                StepsDown := Item.downCount - PreviousDownCount
+                UpdateStatus("Buying " Item.name "...")
+                UpdateCurrentProgress(
+                    Item.name,
+                    OverallIndex " of " TotalSelected
+                )
 
-                if StepsDown < 1 {
-                    StopImmediately("Invalid shop order for " Item.name ".")
+                PurchaseAttempts += 1
+                UpdateStatsDisplay()
+
+                if !ClickCurrentCashButton() {
                     break
                 }
+            }
 
-                if !MoveDownThroughShop(StepsDown) {
+            if ItemIndex < CategoryItems.Length {
+                if !ScrollShopOneItem() {
                     break
                 }
             }
-
-            UpdateStatus("Buying " Item.name "...")
-            UpdateCurrentProgress(
-                Item.name,
-                OverallIndex " of " TotalSelected
-            )
-
-            PurchaseAttempts += 1
-            UpdateStatsDisplay()
-
-            if !PurchaseAvailableStock() {
-                break
-            }
-
-            PreviousDownCount := Item.downCount
-
-            if IsStopRequested {
-                break
-            }
-
-            Sleep(Settings.betweenItemsDelay)
         }
 
         if !IsRunning || IsStopRequested {
             break
         }
 
-        ; Close safely once after the entire category.
-        if !CloseShopSafely() {
+        if !CloseShopSafelyMouseMode() {
             break
         }
 
@@ -864,6 +861,139 @@ RunPurchaseCycle() {
     UpdateCurrentProgress("—", "Cycle complete")
 
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
+}
+
+PrepareMouseCategory(Category) {
+    global Settings
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
+        return false
+    }
+
+    switch Category {
+        case "Factories":
+            TabX := ClientX + Round(ClientWidth * 0.307)
+
+        case "Houses":
+            TabX := ClientX + Round(ClientWidth * 0.435)
+
+        case "Military":
+            TabX := ClientX + Round(ClientWidth * 0.563)
+
+        default:
+            StopImmediately("Unknown category: " Category)
+            return false
+    }
+
+    TabY := ClientY + Round(ClientHeight * 0.318)
+
+    Click(TabX, TabY)
+    Sleep(Settings.categoryClickDelay)
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Category switch failed - shop lost.")
+        return false
+    }
+
+    ; Put the mouse over the shop list and force the scroll frame to the top.
+    ListX := ClientX + Round(ClientWidth * 0.615)
+    ListY := ClientY + Round(ClientHeight * 0.555)
+
+    MouseMove(ListX, ListY, 0)
+
+    Loop 40 {
+        Send("{WheelUp}")
+    }
+
+    Sleep(120)
+    return true
+}
+
+ClickCurrentCashButton() {
+    global Settings
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
+        return false
+    }
+
+    ; Top visible item's green cash button.
+    CashX := ClientX + Round(ClientWidth * 0.679)
+    CashY := ClientY + Round(ClientHeight * 0.553)
+
+    MouseMove(CashX, CashY, 0)
+
+    Attempts := Settings.buyFullStock ? Settings.maxStockAttempts : 1
+
+    Loop Attempts {
+        if !IsRunning || IsStopRequested {
+            return true
+        }
+
+        Click()
+        Sleep(Settings.fixedPurchaseDelay)
+    }
+
+    Sleep(60)
+    return true
+}
+
+ScrollShopOneItem() {
+    global Settings
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    ; Keep the pointer inside the scrolling list so wheel events cannot affect
+    ; unrelated Roblox UI.
+    ListX := ClientX + Round(ClientWidth * 0.615)
+    ListY := ClientY + Round(ClientHeight * 0.610)
+    MouseMove(ListX, ListY, 0)
+
+    Loop Settings.wheelStepsPerItem {
+        Send("{WheelDown}")
+        Sleep(Settings.wheelStepDelay)
+    }
+
+    return true
+}
+
+CloseShopSafelyMouseMode() {
+    global Settings
+
+    if Settings.shopGuardEnabled && !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    CloseX := ClientX + Round(ClientWidth * 0.735)
+    CloseY := ClientY + Round(ClientHeight * 0.215)
+
+    Click(CloseX, CloseY)
+    Sleep(Settings.shopCloseDelay)
+
+    return true
 }
 
 MoveDownThroughShop(Count) {
@@ -1220,7 +1350,7 @@ ApplySettingsFromGui() {
     global CycleDelayEdit, BetweenItemsEdit, MaxStockEdit
     global AutoFocusCheckbox, RememberSelectionsCheckbox
     global BuyFullStockCheckbox, ShopGuardCheckbox
-    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown
+    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown, WheelStepsEdit
 
     CycleSecondsValue := ReadClampedInteger(
         CycleDelayEdit,
@@ -1265,6 +1395,12 @@ ApplySettingsFromGui() {
         1200,
         500,
         5000
+    )
+    Settings.wheelStepsPerItem := ReadClampedInteger(
+        WheelStepsEdit,
+        3,
+        1,
+        8
     )
     Settings.repeatMode := RepeatModeDropdown.Text
 }
