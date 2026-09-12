@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v2.7.0-mouse-only-test"
+AppVersion := "v3.0.0-self-healing-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -63,10 +63,12 @@ Settings := {
     categoryClickDelay: 180,
     itemAnchorDelay: 160,
 
-    ; Mouse-only shop sweep.
+    ; Self-healing mouse-only shop sweep.
     mouseOnlyPurchasing: true,
-    wheelStepsPerItem: 3,
-    wheelStepDelay: 35
+    wheelStepDelay: 35,
+    rowAlignmentTolerance: 14,
+    rowAdvanceMaxAttempts: 12,
+    stateRetryLimit: 3
 }
 
 ; -----------------------------------------------------------------------------
@@ -176,6 +178,7 @@ IsRefreshingLists := false
 ; to the category Roblox is actually showing.
 CurrentShopCategory := ""
 CurrentCategoryFirstDownCount := 1
+CurrentRowAnchorY := 0
 
 CyclesCompleted := 0
 PurchaseAttempts := 0
@@ -407,19 +410,20 @@ ShopOpenDelayEdit := MainGui.Add(
 MainGui.Add("UpDown", "Range500-5000", Settings.shopOpenDelay)
 MainGui.Add("Text", "x890 y360 w60 h22", "ms")
 
-MainGui.Add("Text", "x605 y400 w170 h22", "Wheel steps / item")
-WheelStepsEdit := MainGui.Add(
+MainGui.Add("Text", "x605 y400 w170 h22", "Row align tolerance")
+RowToleranceEdit := MainGui.Add(
     "Edit",
     "x790 y395 w90 h26 Number",
-    Settings.wheelStepsPerItem
+    Settings.rowAlignmentTolerance
 )
-MainGui.Add("UpDown", "Range1-8", Settings.wheelStepsPerItem)
+MainGui.Add("UpDown", "Range6-30", Settings.rowAlignmentTolerance)
+MainGui.Add("Text", "x890 y400 w60 h22", "px")
 
 MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x605 y455 w420 h100",
-    "Mouse-only shop mode: category tabs, scrolling, and green cash buttons are controlled directly with the mouse. Roblox UI Navigation is not used while buying."
+    "Self-healing mouse mode: the macro verifies shop rows visually, advances exactly one row at a time, and rebuilds its position from the top if alignment is lost."
 )
 
 MainTabs.UseTab()
@@ -734,6 +738,7 @@ RunPurchaseCycle() {
     global Settings
     global IsRunning, IsCycleActive, IsStopRequested
     global CyclesCompleted, PurchaseAttempts, Items
+    global CurrentRowAnchorY
 
     if !IsRunning || IsCycleActive {
         return
@@ -748,6 +753,11 @@ RunPurchaseCycle() {
 
     IsCycleActive := true
 
+    if !EnsureShopOpen() {
+        IsCycleActive := false
+        return
+    }
+
     Categories := ["Factories", "Houses", "Military"]
     TotalSelected := SelectedItems.Length
     OverallIndex := 0
@@ -757,10 +767,18 @@ RunPurchaseCycle() {
             break
         }
 
-        HasSelectedInCategory := false
+        CategoryItems := []
 
         for Item in Items {
-            if Item.category = Category && Item.selected {
+            if Item.category = Category {
+                CategoryItems.Push(Item)
+            }
+        }
+
+        HasSelectedInCategory := false
+
+        for Item in CategoryItems {
+            if Item.selected {
                 HasSelectedInCategory := true
                 break
             }
@@ -770,27 +788,10 @@ RunPurchaseCycle() {
             continue
         }
 
-        UpdateStatus("Opening " Category "...")
+        UpdateStatus("Preparing " Category "...")
 
-        if !OpenShop() {
+        if !PrepareVisualCategory(Category) {
             break
-        }
-
-        ; OpenShop's proven sequence leaves Roblox UI Navigation enabled.
-        ; Turn it OFF before the mouse-only sweep begins.
-        Send("\")
-        Sleep(100)
-
-        if !PrepareMouseCategory(Category) {
-            break
-        }
-
-        CategoryItems := []
-
-        for Item in Items {
-            if Item.category = Category {
-                CategoryItems.Push(Item)
-            }
         }
 
         for ItemIndex, Item in CategoryItems {
@@ -810,14 +811,21 @@ RunPurchaseCycle() {
                 PurchaseAttempts += 1
                 UpdateStatsDisplay()
 
-                if !ClickCurrentCashButton() {
+                if !ClickAnchoredCashButton() {
                     break
                 }
             }
 
             if ItemIndex < CategoryItems.Length {
-                if !ScrollShopOneItem() {
-                    break
+                if !AdvanceExactlyOneShopRow() {
+                    UpdateStatus("Recovering " Category " position...")
+
+                    if !RecoverCategoryPosition(Category, ItemIndex + 1) {
+                        StopImmediately(
+                            "Could not recover shop position - AutoBuy stopped."
+                        )
+                        break
+                    }
                 }
             }
         }
@@ -825,12 +833,6 @@ RunPurchaseCycle() {
         if !IsRunning || IsStopRequested {
             break
         }
-
-        if !CloseShopSafelyMouseMode() {
-            break
-        }
-
-        Sleep(Settings.betweenItemsDelay)
     }
 
     IsCycleActive := false
@@ -853,14 +855,379 @@ RunPurchaseCycle() {
     UpdateStatsDisplay()
 
     UpdateStatus(
-        "Waiting "
+        "Cycle complete - waiting "
         Round(Settings.cycleDelay / 1000)
-        " seconds for the next cycle"
+        " seconds"
     )
 
     UpdateCurrentProgress("—", "Cycle complete")
 
+    ; Leave the shop open. The next cycle re-validates everything before acting.
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
+}
+
+EnsureShopOpen() {
+    global Settings
+
+    if IsShopVisible() {
+        return true
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        StopImmediately("Could not read Roblox window position.")
+        return false
+    }
+
+    ; Click the permanent Shop button on the left-side Roblox HUD.
+    ShopX := ClientX + Round(ClientWidth * 0.050)
+    ShopY := ClientY + Round(ClientHeight * 0.325)
+
+    Loop Settings.stateRetryLimit {
+        if !WinActive(Settings.robloxWindow) {
+            StopImmediately("Roblox lost focus.")
+            return false
+        }
+
+        Click(ShopX, ShopY)
+
+        Loop 20 {
+            Sleep(100)
+
+            if IsShopVisible() {
+                return true
+            }
+        }
+    }
+
+    StopImmediately("Could not open the shop.")
+    return false
+}
+
+PrepareVisualCategory(Category) {
+    global Settings, CurrentRowAnchorY
+
+    if !EnsureShopOpen() {
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    switch Category {
+        case "Factories":
+            TabX := ClientX + Round(ClientWidth * 0.307)
+
+        case "Houses":
+            TabX := ClientX + Round(ClientWidth * 0.435)
+
+        case "Military":
+            TabX := ClientX + Round(ClientWidth * 0.563)
+
+        default:
+            StopImmediately("Unknown category: " Category)
+            return false
+    }
+
+    TabY := ClientY + Round(ClientHeight * 0.307)
+
+    Loop Settings.stateRetryLimit {
+        if !IsShopVisible() {
+            if !EnsureShopOpen() {
+                return false
+            }
+        }
+
+        Click(TabX, TabY)
+        Sleep(Settings.categoryClickDelay)
+
+        ; Force this category to the top without assuming how many wheel
+        ; notches are required.
+        ListX := ClientX + Round(ClientWidth * 0.620)
+        ListY := ClientY + Round(ClientHeight * 0.590)
+
+        MouseMove(ListX, ListY, 0)
+
+        Loop 35 {
+            Send("{WheelUp}")
+        }
+
+        Sleep(120)
+
+        Centers := FindRobuxButtonCenters()
+
+        if Centers.Length >= 2 {
+            CurrentRowAnchorY := Centers[1]
+            return true
+        }
+
+        Sleep(150)
+    }
+
+    StopImmediately("Could not verify " Category " shop rows.")
+    return false
+}
+
+FindRobuxButtonCenters() {
+    Centers := []
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return Centers
+    }
+
+    SampleX1 := ClientX + Round(ClientWidth * 0.500)
+    SampleX2 := ClientX + Round(ClientWidth * 0.535)
+    SampleX3 := ClientX + Round(ClientWidth * 0.570)
+
+    SearchTop := ClientY + Round(ClientHeight * 0.355)
+    SearchBottom := ClientY + Round(ClientHeight * 0.835)
+
+    InRun := false
+    RunStart := 0
+    LastMatchY := 0
+    MatchCount := 0
+
+    Y := SearchTop
+
+    while Y <= SearchBottom {
+        PurpleVotes := 0
+
+        for SampleX in [SampleX1, SampleX2, SampleX3] {
+            Color := PixelGetColor(SampleX, Y, "RGB")
+
+            Red := (Color >> 16) & 0xFF
+            Green := (Color >> 8) & 0xFF
+            Blue := Color & 0xFF
+
+            IsPurple := (
+                Red >= 95
+                && Blue >= 105
+                && Green <= 125
+                && Red >= Green * 1.15
+                && Blue >= Green * 1.20
+            )
+
+            if IsPurple {
+                PurpleVotes += 1
+            }
+        }
+
+        if PurpleVotes >= 2 {
+            if !InRun {
+                InRun := true
+                RunStart := Y
+                MatchCount := 0
+            }
+
+            LastMatchY := Y
+            MatchCount += 1
+        } else if InRun {
+            RunHeight := LastMatchY - RunStart
+
+            if RunHeight >= 18 && MatchCount >= 5 {
+                Centers.Push(Round((RunStart + LastMatchY) / 2))
+            }
+
+            InRun := false
+            RunStart := 0
+            LastMatchY := 0
+            MatchCount := 0
+        }
+
+        Y += 3
+    }
+
+    if InRun {
+        RunHeight := LastMatchY - RunStart
+
+        if RunHeight >= 18 && MatchCount >= 5 {
+            Centers.Push(Round((RunStart + LastMatchY) / 2))
+        }
+    }
+
+    return Centers
+}
+
+ClickAnchoredCashButton() {
+    global Settings, CurrentRowAnchorY
+
+    if !IsShopVisible() {
+        StopImmediately("Shop lost - AutoBuy stopped for safety.")
+        return false
+    }
+
+    if CurrentRowAnchorY <= 0 {
+        StopImmediately("Shop row anchor was lost.")
+        return false
+    }
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    Centers := FindRobuxButtonCenters()
+
+    if !HasCenterNear(Centers, CurrentRowAnchorY, Settings.rowAlignmentTolerance) {
+        return false
+    }
+
+    CashX := ClientX + Round(ClientWidth * 0.680)
+    CashY := CurrentRowAnchorY
+
+    ; Never click unless the target is inside the verified shop list region.
+    MinimumY := ClientY + Round(ClientHeight * 0.350)
+    MaximumY := ClientY + Round(ClientHeight * 0.840)
+
+    if CashY < MinimumY || CashY > MaximumY {
+        StopImmediately("Unsafe purchase coordinate blocked.")
+        return false
+    }
+
+    MouseMove(CashX, CashY, 0)
+
+    Attempts := Settings.buyFullStock ? Settings.maxStockAttempts : 1
+
+    Loop Attempts {
+        if !IsRunning || IsStopRequested {
+            return true
+        }
+
+        if !IsShopVisible() {
+            StopImmediately("Shop lost - AutoBuy stopped for safety.")
+            return false
+        }
+
+        Click()
+        Sleep(Settings.fixedPurchaseDelay)
+    }
+
+    Sleep(60)
+    return true
+}
+
+AdvanceExactlyOneShopRow() {
+    global Settings, CurrentRowAnchorY
+
+    if !IsShopVisible() {
+        return false
+    }
+
+    if CurrentRowAnchorY <= 0 {
+        return false
+    }
+
+    BeforeFingerprint := GetRowFingerprint(CurrentRowAnchorY)
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return false
+    }
+
+    ListX := ClientX + Round(ClientWidth * 0.620)
+    ListY := ClientY + Round(ClientHeight * 0.610)
+    MouseMove(ListX, ListY, 0)
+
+    Loop Settings.rowAdvanceMaxAttempts {
+        Send("{WheelDown}")
+        Sleep(Settings.wheelStepDelay)
+
+        Centers := FindRobuxButtonCenters()
+
+        if !HasCenterNear(
+            Centers,
+            CurrentRowAnchorY,
+            Settings.rowAlignmentTolerance
+        ) {
+            continue
+        }
+
+        AfterFingerprint := GetRowFingerprint(CurrentRowAnchorY)
+
+        if FingerprintsDiffer(BeforeFingerprint, AfterFingerprint) {
+            return true
+        }
+    }
+
+    return false
+}
+
+GetRowFingerprint(RowY) {
+    Fingerprint := []
+
+    if !GetRobloxClientRect(&ClientX, &ClientY, &ClientWidth, &ClientHeight) {
+        return Fingerprint
+    }
+
+    SampleXs := [
+        ClientX + Round(ClientWidth * 0.285),
+        ClientX + Round(ClientWidth * 0.315),
+        ClientX + Round(ClientWidth * 0.350),
+        ClientX + Round(ClientWidth * 0.405)
+    ]
+
+    for OffsetY in [-45, -15, 15, 45] {
+        SampleY := RowY + OffsetY
+
+        for SampleX in SampleXs {
+            Fingerprint.Push(PixelGetColor(SampleX, SampleY, "RGB"))
+        }
+    }
+
+    return Fingerprint
+}
+
+FingerprintsDiffer(First, Second) {
+    if First.Length = 0 || First.Length != Second.Length {
+        return false
+    }
+
+    DifferenceScore := 0
+
+    Loop First.Length {
+        ColorA := First[A_Index]
+        ColorB := Second[A_Index]
+
+        RedA := (ColorA >> 16) & 0xFF
+        GreenA := (ColorA >> 8) & 0xFF
+        BlueA := ColorA & 0xFF
+
+        RedB := (ColorB >> 16) & 0xFF
+        GreenB := (ColorB >> 8) & 0xFF
+        BlueB := ColorB & 0xFF
+
+        DifferenceScore += Abs(RedA - RedB)
+        DifferenceScore += Abs(GreenA - GreenB)
+        DifferenceScore += Abs(BlueA - BlueB)
+    }
+
+    return DifferenceScore >= 500
+}
+
+HasCenterNear(Centers, TargetY, Tolerance) {
+    for CenterY in Centers {
+        if Abs(CenterY - TargetY) <= Tolerance {
+            return true
+        }
+    }
+
+    return false
+}
+
+RecoverCategoryPosition(Category, CompletedItemCount) {
+    global Settings, CurrentRowAnchorY
+
+    if !PrepareVisualCategory(Category) {
+        return false
+    }
+
+    ; CompletedItemCount is the number of rows already processed. Rebuild the
+    ; exact position from a known top-of-category state.
+    Loop CompletedItemCount {
+        if !AdvanceExactlyOneShopRow() {
+            return false
+        }
+    }
+
+    return true
 }
 
 PrepareMouseCategory(Category) {
@@ -1026,31 +1393,7 @@ MoveDownThroughShop(Count) {
 ; -----------------------------------------------------------------------------
 
 OpenShop() {
-    global Settings
-
-    if !SendToRoblox("\") {
-        return false
-    }
-
-    Loop 3 {
-        if !SendToRoblox("{Left}") {
-            return false
-        }
-    }
-
-    if !SendToRoblox("{Enter}") {
-        return false
-    }
-
-    Sleep(Settings.shopEntryDelay)
-
-    if !SendToRoblox("e") {
-        return false
-    }
-
-    Sleep(Settings.shopOpenDelay)
-
-    return true
+    return EnsureShopOpen()
 }
 
 OpenCategory(Category) {
@@ -1350,7 +1693,7 @@ ApplySettingsFromGui() {
     global CycleDelayEdit, BetweenItemsEdit, MaxStockEdit
     global AutoFocusCheckbox, RememberSelectionsCheckbox
     global BuyFullStockCheckbox, ShopGuardCheckbox
-    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown, WheelStepsEdit
+    global FixedPurchaseDelayEdit, ShopOpenDelayEdit, RepeatModeDropdown, RowToleranceEdit
 
     CycleSecondsValue := ReadClampedInteger(
         CycleDelayEdit,
@@ -1396,11 +1739,11 @@ ApplySettingsFromGui() {
         500,
         5000
     )
-    Settings.wheelStepsPerItem := ReadClampedInteger(
-        WheelStepsEdit,
-        3,
-        1,
-        8
+    Settings.rowAlignmentTolerance := ReadClampedInteger(
+        RowToleranceEdit,
+        14,
+        6,
+        30
     )
     Settings.repeatMode := RepeatModeDropdown.Text
 }
