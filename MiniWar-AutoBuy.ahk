@@ -18,7 +18,7 @@ CoordMode("Pixel", "Screen")
 ; Application
 ; -----------------------------------------------------------------------------
 
-AppVersion := "v3.3.0-button-lock-test"
+AppVersion := "v3.4.0-fast-strict-test"
 ConfigFile := A_ScriptDir "\MiniWar-AutoBuy.ini"
 
 Settings := {
@@ -78,8 +78,9 @@ Settings := {
     ; Roblox inputs do not leave stock behind.
     minimumStockTarget: 5,
     reliablePurchaseAttempts: 10,
-    reliableClickDelay: 125,
-    buttonSearchRadiusY: 95
+    reliableClickDelay: 85,
+    buttonSearchRadiusY: 85,
+    itemRetryLimit: 3
 }
 
 ; -----------------------------------------------------------------------------
@@ -374,7 +375,7 @@ MainGui.SetFont("s8 Norm", "Segoe UI")
 MainGui.Add(
     "Text",
     "x65 y405 w420 h70",
-    "Reliable-stock mode sends 10 click attempts by default, with a minimum setting of 5, and periodically re-locks onto the detected green cash button."
+    "Fast reliable-stock mode locks onto the green cash button once, sends a 10-click burst, and never marks a cycle complete unless every selected item succeeds."
 )
 
 MainGui.SetFont("s10 Bold", "Segoe UI")
@@ -769,9 +770,11 @@ RunPurchaseCycle() {
     Categories := ["Factories", "Houses", "Military"]
     TotalSelected := SelectedItems.Length
     OverallIndex := 0
+    CycleSucceeded := true
 
     for Category in Categories {
         if !IsRunning || IsStopRequested {
+            CycleSucceeded := false
             break
         }
 
@@ -798,8 +801,8 @@ RunPurchaseCycle() {
 
         UpdateStatus("Preparing " Category "...")
 
-        ; Clicking the category tab is our deterministic reset-to-top operation.
         if !ResetCategoryToTop(Category) {
+            CycleSucceeded := false
             break
         }
 
@@ -807,6 +810,7 @@ RunPurchaseCycle() {
 
         for ItemIndex, Item in CategoryItems {
             if !IsRunning || IsStopRequested {
+                CycleSucceeded := false
                 break
             }
 
@@ -824,36 +828,78 @@ RunPurchaseCycle() {
 
             if ScrollDifference > 0 {
                 if !ScrollShopBy(ScrollDifference) {
+                    CycleSucceeded := false
                     break
                 }
 
                 CurrentScrollPosition := TargetScrollPosition
             }
 
-            OverallIndex += 1
+            NextOverallIndex := OverallIndex + 1
 
             UpdateStatus("Buying " Item.name "...")
             UpdateCurrentProgress(
                 Item.name,
-                OverallIndex " of " TotalSelected
+                NextOverallIndex " of " TotalSelected
             )
 
-            PurchaseAttempts += 1
-            UpdateStatsDisplay()
-
-            ; At the absolute bottom, the final item occupies the lower visible
-            ; row. Otherwise the calibrated target places the item in the top row.
             UseBottomRow := (
                 ItemIndex = CategoryItems.Length
                 && TargetScrollPosition = GetCategoryTotalScrolls(Category)
             )
 
-            if !ClickCalibratedCashButton(UseBottomRow) {
+            ItemSucceeded := false
+
+            Loop Settings.itemRetryLimit {
+                PurchaseAttempts += 1
+                UpdateStatsDisplay()
+
+                if ClickCalibratedCashButton(UseBottomRow) {
+                    ItemSucceeded := true
+                    break
+                }
+
+                if !IsRunning || IsStopRequested {
+                    break
+                }
+
+                UpdateStatus(
+                    "Retrying "
+                    Item.name
+                    " ("
+                    A_Index
+                    "/"
+                    Settings.itemRetryLimit
+                    ")"
+                )
+
+                ; Rebuild this category from a known top state, then return to
+                ; this item's calibrated position. Never silently skip an item.
+                if !ResetCategoryToTop(Category) {
+                    break
+                }
+
+                CurrentScrollPosition := 0
+
+                if TargetScrollPosition > 0 {
+                    if !ScrollShopBy(TargetScrollPosition) {
+                        break
+                    }
+
+                    CurrentScrollPosition := TargetScrollPosition
+                }
+            }
+
+            if !ItemSucceeded {
+                CycleSucceeded := false
+                UpdateStatus("Failed at " Item.name " - cycle not complete.")
                 break
             }
+
+            OverallIndex := NextOverallIndex
         }
 
-        if !IsRunning || IsStopRequested {
+        if !CycleSucceeded {
             break
         }
     }
@@ -873,19 +919,38 @@ RunPurchaseCycle() {
         return
     }
 
+    ; Never claim completion unless every selected item actually succeeded.
+    if !CycleSucceeded || OverallIndex != TotalSelected {
+        UpdateStatus(
+            "Cycle incomplete: "
+            OverallIndex
+            "/"
+            TotalSelected
+            " items completed"
+        )
+        UpdateCurrentProgress("—", "Recovery needed")
+
+        ; Retry the entire cycle after a short pause instead of pretending the
+        ; shop was finished.
+        SetTimer(RunPurchaseCycle, -3000)
+        return
+    }
+
     CyclesCompleted += 1
     UpdateStatsDisplay()
 
     UpdateStatus(
-        "Cycle complete - waiting "
+        "Cycle complete: "
+        TotalSelected
+        "/"
+        TotalSelected
+        " - waiting "
         Round(Settings.cycleDelay / 1000)
         " seconds"
     )
 
     UpdateCurrentProgress("—", "Cycle complete")
 
-    ; Keep the Shopkeeper shop open. Every new category click resets its list
-    ; to the top, and the next cycle re-verifies the shop before acting.
     SetTimer(RunPurchaseCycle, -Settings.cycleDelay)
 }
 
@@ -1004,6 +1069,8 @@ ScrollShopBy(ScrollCount) {
 ClickCalibratedCashButton(UseBottomRow := false) {
     global Settings
 
+    ; One safety verification BEFORE the burst. Do not run multiple expensive
+    ; PixelSearch shop checks between every click.
     if !IsShopkeeperShopVisible() {
         StopImmediately("Shop lost - AutoBuy stopped for safety.")
         return false
@@ -1013,63 +1080,48 @@ ClickCalibratedCashButton(UseBottomRow := false) {
         return false
     }
 
-    ; The calibrated scroll position gets us close to the correct row.
-    ; Do NOT trust a fixed Y coordinate from here. Find the actual bright-green
-    ; cash button in a local vertical search window and click its real center.
     ExpectedY := (
         UseBottomRow
         ? ClientY + Round(ClientHeight * 0.785)
         : ClientY + Round(ClientHeight * 0.555)
     )
 
+    ; Lock once onto the actual green cash button.
     if !FindNearestCashButton(ExpectedY, &CashX, &CashY) {
-        ; A small alignment correction handles cases where Roblox consumed a
-        ; wheel notch differently than expected.
         if !FineAlignCashButton(ExpectedY, &CashX, &CashY) {
-            UpdateStatus("Could not lock onto cash button.")
             return false
         }
     }
 
     MouseMove(CashX, CashY, 0)
-    Sleep(50)
+    Sleep(30)
 
-    ; Use a reliability burst. Ten attempts gives enough redundancy to clear at
-    ; least five units even if Roblox drops a few rapid inputs.
     Attempts := Settings.buyFullStock
         ? Max(Settings.maxStockAttempts, Settings.reliablePurchaseAttempts)
         : 1
 
+    ; Fast uninterrupted burst. Ten attempts at ~85ms spacing is under one
+    ; second and gives plenty of redundancy for five-stock items.
     Loop Attempts {
         if !IsRunning || IsStopRequested {
             return true
         }
 
-        if !IsShopkeeperShopVisible() {
-            StopImmediately("Shop lost during purchase burst.")
-            return false
-        }
-
-        ; Re-lock periodically in case the button shifts slightly while stock
-        ; updates or the list settles.
-        if Mod(A_Index - 1, 3) = 0 {
-            if FindNearestCashButton(CashY, &LockedX, &LockedY) {
-                CashX := LockedX
-                CashY := LockedY
-                MouseMove(CashX, CashY, 0)
-            }
-        }
-
-        ; Explicit down/up is more consistent in Roblox than a zero-duration
-        ; Click() burst.
         Click("Down")
-        Sleep(24)
+        Sleep(18)
         Click("Up")
 
         Sleep(Settings.reliableClickDelay)
     }
 
-    Sleep(100)
+    Sleep(55)
+
+    ; One safety verification AFTER the burst.
+    if !IsShopkeeperShopVisible() {
+        StopImmediately("Shop lost after purchase burst.")
+        return false
+    }
+
     return true
 }
 
